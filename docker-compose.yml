@@ -1,0 +1,46 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: locopilot-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-locopilot}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-locopilot}
+      POSTGRES_DB: ${POSTGRES_DB:-locopilot}
+    ports:
+      - "${POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./infrastructure/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-locopilot} -d ${POSTGRES_DB:-locopilot}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - locopilot-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: locopilot-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "${REDIS_PORT:-6380}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - locopilot-network
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  locopilot-network:
+    name: locopilot-network
