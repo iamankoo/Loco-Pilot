@@ -40,6 +40,12 @@ class ToolError(Exception):
     """
 
 
+class ToolPermissionError(ToolError):
+    """Raised when a caller (an agent) requests a tool outside its granted
+    permission set. Structural, not advisory — callers must check this
+    before invoking a tool, not rely on the LLM not asking."""
+
+
 @dataclass(frozen=True)
 class ToolContext:
     """Everything a tool execution is scoped to: the workspace it may touch,

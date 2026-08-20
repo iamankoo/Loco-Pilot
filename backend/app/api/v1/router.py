@@ -8,10 +8,12 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
+from backend.app.api.v1.executions import router as executions_router
 from backend.app.api.v1.tools import router as tools_router
 
 router = APIRouter()
 router.include_router(tools_router)
+router.include_router(executions_router)
 
 
 @router.get("/")

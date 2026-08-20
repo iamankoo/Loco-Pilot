@@ -43,3 +43,18 @@ async def db_session():
     session_factory = get_session_factory()
     async with session_factory() as session:
         yield session
+
+
+@pytest.fixture
+async def client():
+    """An httpx client against the real FastAPI app, for API-level tests
+    that also need `db_session`/`tmp_workspace` from this conftest (the
+    `client` fixture in backend/tests/conftest.py is not visible here —
+    separate fixture trees)."""
+    from httpx import ASGITransport, AsyncClient
+
+    from backend.app.main import app as fastapi_app
+
+    transport = ASGITransport(app=fastapi_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        yield ac

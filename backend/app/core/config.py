@@ -41,6 +41,23 @@ class Settings(BaseSettings):
     llm_temperature: float = 0.2
     llm_request_timeout: int = 60
 
+    # ---- Embedding provider ----
+    # "hashing" (default) is a free, local, deterministic embedding used so
+    # the RAG pipeline runs without any paid API. "openai_compatible" uses
+    # an OpenAI-compatible embeddings endpoint (configurable, not tied to
+    # any single vendor).
+    embedding_provider: str = "hashing"
+    embedding_base_url: str = ""
+    embedding_model: str = "text-embedding-3-small"
+    embedding_api_key: str | None = None
+    # Fixed pgvector column width — the hashing provider always produces
+    # this many dimensions; an OpenAI-compatible provider is asked to
+    # truncate to this same width so the schema stays provider-agnostic.
+    embedding_dimension: int = 384
+
+    # ---- Agent execution ----
+    max_debug_retries: int = 2
+
     # ---- Logging ----
     log_level: str = "INFO"
     log_format: Literal["console", "json"] = "console"

@@ -16,6 +16,8 @@ dependencies = [
     "redis>=5.2,<6.0",
     "langchain-core>=0.3,<0.4",
     "langchain-openai>=0.2,<0.3",
+    "langgraph>=0.2,<0.7",
+    "pgvector>=0.3,<1.0",
     "structlog>=24.4,<25.0",
     "httpx>=0.27,<1.0",
 ]
@@ -31,10 +33,13 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["backend", "tools"]
+packages = ["backend", "tools", "agents", "rag"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 asyncio_default_test_loop_scope = "session"
 asyncio_default_fixture_loop_scope = "session"
 testpaths = ["backend/tests", "tests"]
+# Domain classes named TestResult/TesterAgent aren't pytest test classes —
+# pytest's name-based collection heuristic just thinks they might be.
+filterwarnings = ["ignore::_pytest.warning_types.PytestCollectionWarning"]

@@ -9,25 +9,18 @@ from __future__ import annotations
 
 import time
 import uuid
+from dataclasses import dataclass
 from typing import Literal
 
-from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.core.logging import get_logger
 from backend.app.db.repositories.tool_calls import create_tool_call
-from tools.base import ToolContext, ToolError
+from tools.base import Permission, ToolContext, ToolError, ToolPermissionError
+from tools.execution_result import ToolExecutionResult
 from tools.registry import ToolRegistry
 
 logger = get_logger(component="tool_execution")
-
-
-class ToolExecutionResult(BaseModel):
-    tool_name: str
-    status: Literal["success", "error"]
-    output: dict | None
-    error: str | None
-    duration_ms: int
 
 
 async def execute_tool(
@@ -95,3 +88,29 @@ async def execute_tool(
         error=error_message,
         duration_ms=duration_ms,
     )
+
+
+@dataclass
+class BoundToolRunner:
+    """The only tool-calling surface an agent ever sees.
+
+    Bound to one agent's permission set, one execution/agent-step context,
+    and (if available) a DB session for persistence — none of which the
+    agent itself has direct access to. This is what keeps agent classes
+    free of any SQLAlchemy dependency: they call `.call(name, input)` and
+    get back a `ToolExecutionResult`; everything else is closed over here
+    by the caller (the graph node) that constructs this runner.
+    """
+
+    registry: ToolRegistry
+    context: ToolContext
+    permissions: set[Permission]
+    db: AsyncSession | None = None
+
+    async def call(self, tool_name: str, tool_input: dict) -> ToolExecutionResult:
+        if tool_name not in self.available_tools():
+            raise ToolPermissionError(f"Tool '{tool_name}' is not permitted for this agent.")
+        return await execute_tool(self.registry, tool_name, tool_input, self.context, db=self.db)
+
+    def available_tools(self) -> set[str]:
+        return {t.name for t in self.registry.list_tools(permissions=self.permissions)}
