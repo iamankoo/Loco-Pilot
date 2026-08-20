@@ -16,10 +16,16 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.app.db.models.execution import ExecutionStatus
 from backend.app.db.repositories.executions import get_execution
 from backend.app.db.repositories.projects import create_project, get_project
 from backend.app.db.session import get_db
-from backend.app.services.execution_service import ExecutionServiceError, create_and_run_execution, run_execution
+from backend.app.services.execution_service import (
+    ExecutionServiceError,
+    cancel_execution,
+    create_and_run_execution,
+    run_execution,
+)
 from tools.workspace import Workspace, WorkspaceError
 
 router = APIRouter(prefix="/executions", tags=["executions"])
@@ -84,4 +90,24 @@ async def get_execution_endpoint(execution_id: uuid.UUID, db: AsyncSession = Dep
     execution = await get_execution(db, execution_id)
     if execution is None:
         raise HTTPException(404, "Execution not found.")
+    return ExecutionResponse.model_validate(execution)
+
+
+@router.post("/{execution_id}/cancel", status_code=202, response_model=ExecutionResponse)
+async def cancel_execution_endpoint(
+    execution_id: uuid.UUID, db: AsyncSession = Depends(get_db)
+) -> ExecutionResponse:
+    """Signals cancellation — checked between agent turns (see
+    `agents.graph.make_agent_node`), so a command already running inside
+    the Docker sandbox completes before the next checkpoint rather than
+    being force-killed mid-execution. Has no effect on an execution that
+    has already reached a terminal status."""
+    execution = await get_execution(db, execution_id)
+    if execution is None:
+        raise HTTPException(404, "Execution not found.")
+    if execution.status in (
+        ExecutionStatus.PENDING.value,
+        ExecutionStatus.RUNNING.value,
+    ):
+        cancel_execution(execution_id)
     return ExecutionResponse.model_validate(execution)

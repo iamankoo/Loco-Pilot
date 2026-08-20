@@ -43,34 +43,12 @@ class RepositoryIndexer:
 
         for file_path in self._discover_files(workspace.root):
             relative_path = workspace.relative(file_path)
-            text = self._read_indexable_text(file_path)
-            if text is None:
+            chunk_count = await self._index_one_file(workspace, project_id, relative_path, file_path, db)
+            if chunk_count is None:
                 result.files_skipped += 1
-                continue
-
-            chunks = chunk_text(text)
-            if not chunks:
-                result.files_skipped += 1
-                continue
-
-            embeddings = await self._embedding_provider.embed([c.content for c in chunks])
-            chunk_rows = [
-                {
-                    "chunk_index": i,
-                    "content": chunk.content,
-                    "embedding": embeddings[i],
-                    "metadata": {
-                        "start_line": chunk.start_line,
-                        "end_line": chunk.end_line,
-                        "language": file_path.suffix.lstrip("."),
-                    },
-                }
-                for i, chunk in enumerate(chunks)
-            ]
-            await replace_chunks_for_file(db, project_id=project_id, file_path=relative_path, chunks=chunk_rows)
-
-            result.files_indexed += 1
-            result.chunks_created += len(chunks)
+            else:
+                result.files_indexed += 1
+                result.chunks_created += chunk_count
 
         logger.info(
             "repository_indexed",
@@ -80,6 +58,54 @@ class RepositoryIndexer:
             chunks_created=result.chunks_created,
         )
         return result
+
+    async def index_file(
+        self, workspace: Workspace, project_id: uuid.UUID, relative_path: str, db: AsyncSession
+    ) -> int:
+        """Re-indexes exactly one file after it changes — the incremental
+        path a Developer edit/write should trigger, instead of a full
+        `index_repository` walk. Returns the number of chunks written (0 if
+        the file is no longer indexable, e.g. deleted/binary/too large —
+        `replace_chunks_for_file` still clears any stale chunks in that
+        case, so nothing lingers for a file that no longer qualifies)."""
+        file_path = workspace.resolve(relative_path)
+        chunk_count = await self._index_one_file(workspace, project_id, relative_path, file_path, db)
+        return chunk_count or 0
+
+    async def _index_one_file(
+        self,
+        workspace: Workspace,
+        project_id: uuid.UUID,
+        relative_path: str,
+        file_path: Path,
+        db: AsyncSession,
+    ) -> int | None:
+        text = self._read_indexable_text(file_path)
+        if text is None:
+            await replace_chunks_for_file(db, project_id=project_id, file_path=relative_path, chunks=[])
+            return None
+
+        chunks = chunk_text(text)
+        if not chunks:
+            await replace_chunks_for_file(db, project_id=project_id, file_path=relative_path, chunks=[])
+            return None
+
+        embeddings = await self._embedding_provider.embed([c.content for c in chunks])
+        chunk_rows = [
+            {
+                "chunk_index": i,
+                "content": chunk.content,
+                "embedding": embeddings[i],
+                "metadata": {
+                    "start_line": chunk.start_line,
+                    "end_line": chunk.end_line,
+                    "language": file_path.suffix.lstrip("."),
+                },
+            }
+            for i, chunk in enumerate(chunks)
+        ]
+        await replace_chunks_for_file(db, project_id=project_id, file_path=relative_path, chunks=chunk_rows)
+        return len(chunks)
 
     def _discover_files(self, root: Path):
         for dirpath, dirnames, filenames in os.walk(root):

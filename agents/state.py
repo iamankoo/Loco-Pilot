@@ -18,7 +18,17 @@ from agents.schemas import DebugResult, FileChange, Plan, ReviewResult, TestResu
 from rag.retrieval.context_builder import RepositoryContext
 
 ExecutionStatusLiteral = Literal[
-    "pending", "planning", "developing", "testing", "debugging", "reviewing", "passed", "failed", "error"
+    "pending",
+    "planning",
+    "developing",
+    "testing",
+    "debugging",
+    "reviewing",
+    "passed",
+    "failed",
+    "error",
+    "cancelled",
+    "timed_out",
 ]
 
 

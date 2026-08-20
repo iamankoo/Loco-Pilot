@@ -3,21 +3,23 @@ failing fixture goes through Tester -> Debugger -> Developer -> Tester and
 ends up passing.
 
 Every Tester step here runs REAL pytest inside a REAL Docker container,
-with a genuine exit code — that part is never faked. What IS scripted,
-via `FakeStructuredLLMClient`, is every agent's *reasoning* output
-(Plan/DebugResult/DeveloperPlan/ReviewResult, and Tester's own structured
-interpretation of the real exit code/stdout it just received), because no
-live LLM API key exists in this environment (see README/Known
-Limitations — this is the documented graph-integration boundary: genuine
-autonomous multi-turn debugging requires a real model, untested here by
-necessity, consistent with every prior phase's test methodology). The
-scripted TestResult values below correctly reflect what the fixture
-deterministically does and does not do (the bug genuinely makes pytest
-exit nonzero before the fix, and the fix genuinely makes it exit zero
-after) — nothing here is fabricated independent of what Docker actually
-returned. This test proves the graph's routing and the sandbox's
-execution are both mechanically correct: a real bug, really fixed by a
-real tool call, really re-verified by a second real pytest run.
+with a genuine exit code — that part is never faked. Every Developer/
+Debugger tool call is executed by the REAL tool registry against the REAL
+file on disk too (Phase 1.5's tool-calling loop) — what's scripted, via
+`FakeStructuredLLMClient`, is only *which* tool calls each turn makes and
+each agent's final structured summary, because no live LLM API key exists
+in this environment (see README/Known Limitations — this is the
+documented graph-integration boundary: genuine autonomous multi-turn
+debugging requires a real model deciding for itself which tools to call,
+untested here by necessity, consistent with every prior phase's test
+methodology). The scripted call sequence below (do nothing -> investigate
+-> apply the real fix) correctly reflects what the fixture deterministically
+does and does not do — nothing here is fabricated independent of what the
+real tool calls and real Docker execution actually returned. This test
+proves the graph's routing, the tool-calling loop, and the sandbox's
+execution are all mechanically correct: a real bug, really diagnosed by a
+real read_file call, really fixed by a real edit_file call, really
+re-verified by a second real pytest run.
 """
 
 from __future__ import annotations
@@ -28,7 +30,7 @@ from pathlib import Path
 from sqlalchemy import select
 
 from agents.graph import GraphDependencies, build_graph
-from agents.schemas import DebugResult, DeveloperPlan, Plan, ProposedEdit, ReviewResult, TestResult
+from agents.schemas import DebugResult, DeveloperPlan, Plan, ReviewResult, TestResult
 from agents.state import ExecutionState
 from backend.app.db.models.agent_step import AgentStep
 from backend.app.db.repositories.executions import create_execution
@@ -86,16 +88,7 @@ async def test_debug_loop_with_real_docker_execution_fixes_the_bug(db_session, t
                 confidence="high",
                 files_to_change=["calculator.py"],
             ),
-            # Developer runs twice: once before any test has failed (must do
-            # nothing meaningful, so Tester genuinely finds the real bug),
-            # and once after Debugger's diagnosis (applies the real fix).
-            "DeveloperPlan": [
-                DeveloperPlan(summary="inspected calculator.py, awaiting test results before changing anything"),
-                DeveloperPlan(
-                    summary="fix the multiply operator",
-                    edits=[ProposedEdit(path="calculator.py", old_string=_FIXED_LINE, new_string=_CORRECTED_LINE)],
-                ),
-            ],
+            "DeveloperPlan": DeveloperPlan(summary="implemented the plan via tool calls"),
             # Tester delegates structured interpretation to the LLM whenever
             # one is configured (see agents/tester.py) — these two values
             # correctly reflect the real exit code each real pytest run
@@ -118,7 +111,15 @@ async def test_debug_loop_with_real_docker_execution_fixes_the_bug(db_session, t
                 ),
             ],
             "ReviewResult": ReviewResult(verdict="approved", summary="fix verified by a passing test suite"),
-        }
+        },
+        # generate_with_tools is called three times in this run, in this
+        # exact order — one script per call, each executed against the
+        # REAL tool registry and the REAL file on disk:
+        tool_call_scripts=[
+            [],  # Developer's first turn: nothing yet, so Tester genuinely hits the real bug
+            [("read_file", {"path": "calculator.py"})],  # Debugger's investigative turn
+            [("edit_file", {"path": "calculator.py", "old_string": _FIXED_LINE, "new_string": _CORRECTED_LINE})],
+        ],
     )
 
     deps = GraphDependencies(

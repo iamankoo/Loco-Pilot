@@ -28,6 +28,8 @@ class ExecutionStatus(str, enum.Enum):
     FAILED = "failed"
     ERROR = "error"
     NEEDS_REVIEW = "needs_review"
+    CANCELLED = "cancelled"
+    TIMED_OUT = "timed_out"
 
 
 class Execution(Base, UUIDPrimaryKeyMixin, TimestampMixin):

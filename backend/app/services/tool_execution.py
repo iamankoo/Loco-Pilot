@@ -111,6 +111,11 @@ class BoundToolRunner:
     context: ToolContext
     permissions: set[Permission]
     db: AsyncSession | None = None
+    # Optionally narrows the permission-derived set further, by name — e.g.
+    # Debugger is granted WRITE (per the permission table, for interface
+    # completeness) but its investigative tool loop is scoped to read-only
+    # tool names here, since this implementation only ever diagnoses.
+    allowed_tool_names: set[str] | None = None
 
     async def call(self, tool_name: str, tool_input: dict) -> ToolExecutionResult:
         if tool_name not in self.available_tools():
@@ -118,4 +123,22 @@ class BoundToolRunner:
         return await execute_tool(self.registry, tool_name, tool_input, self.context, db=self.db)
 
     def available_tools(self) -> set[str]:
-        return {t.name for t in self.registry.list_tools(permissions=self.permissions)}
+        names = {t.name for t in self.registry.list_tools(permissions=self.permissions)}
+        if self.allowed_tool_names is not None:
+            names &= self.allowed_tool_names
+        return names
+
+    def tool_schemas(self) -> list[dict]:
+        allowed = self.available_tools()
+        return [
+            {
+                "type": "function",
+                "function": {
+                    "name": t.name,
+                    "description": t.description,
+                    "parameters": t.input_schema(),
+                },
+            }
+            for t in self.registry.list_tools(permissions=self.permissions)
+            if t.name in allowed
+        ]

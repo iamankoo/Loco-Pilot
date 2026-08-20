@@ -4,11 +4,13 @@ Architecture: API -> Execution Service -> LangGraph -> Agents -> RAG/Tools.
 FastAPI routes never instantiate agents or build the graph themselves —
 they call into this module, which owns the full lifecycle of one
 execution: creating the DB record, building graph dependencies, running
-the graph to completion, and persisting the final status.
+the graph to completion (bounded by `MAX_EXECUTION_SECONDS`), and
+persisting the final status.
 """
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 
 from agents.graph import GraphDependencies, build_graph
@@ -22,6 +24,7 @@ from backend.app.db.models.project import Project
 from backend.app.db.repositories.executions import create_execution, get_execution, update_execution_status
 from backend.app.db.repositories.projects import get_project
 from backend.app.db.session import get_session_factory
+from backend.app.services.cancellation import clear_cancellation, request_cancellation
 from rag.embeddings.factory import get_embedding_provider
 from tools.registry import build_default_registry
 from tools.workspace import Workspace, WorkspaceError
@@ -60,7 +63,17 @@ async def create_and_run_execution(db, *, project_id: uuid.UUID, task: str) -> E
     return await create_execution(db, project_id=project_id, task=task)
 
 
+def cancel_execution(execution_id: uuid.UUID) -> None:
+    """Requests cancellation of a running execution — checked between graph
+    node transitions (see `agents.graph.make_agent_node`), not mid-tool-call."""
+    request_cancellation(execution_id)
+
+
 def _map_final_status(state: ExecutionState) -> ExecutionStatus:
+    if state.execution_status == "cancelled":
+        return ExecutionStatus.CANCELLED
+    if state.execution_status == "timed_out":
+        return ExecutionStatus.TIMED_OUT
     if state.execution_status == "error":
         return ExecutionStatus.ERROR
     if state.review_result is None:
@@ -115,6 +128,9 @@ async def run_execution(execution_id: uuid.UUID) -> None:
                 embedding_provider=get_embedding_provider(),
                 db=db,
                 max_debug_retries=settings.max_debug_retries,
+                max_tool_calls_per_agent=settings.max_tool_calls_per_agent,
+                max_total_tool_calls=settings.max_total_tool_calls,
+                max_context_chars=settings.max_context_chars,
             )
             graph = build_graph(deps)
 
@@ -126,8 +142,21 @@ async def run_execution(execution_id: uuid.UUID) -> None:
             )
 
             try:
-                final_state_dict = await graph.ainvoke(initial_state, config={"recursion_limit": 50})
+                final_state_dict = await asyncio.wait_for(
+                    graph.ainvoke(initial_state, config={"recursion_limit": 50}),
+                    timeout=settings.max_execution_seconds,
+                )
                 final_state = ExecutionState.model_validate(final_state_dict)
+            except asyncio.TimeoutError:
+                logger.warning("execution_timed_out", timeout_seconds=settings.max_execution_seconds)
+                await update_execution_status(
+                    db,
+                    execution_id,
+                    status=ExecutionStatus.TIMED_OUT,
+                    error_message=f"Execution exceeded the {settings.max_execution_seconds}s time limit.",
+                    mark_completed=True,
+                )
+                return
             except Exception as exc:  # noqa: BLE001 - a hard graph failure must still leave a clean execution record
                 logger.exception("graph_execution_failed")
                 await update_execution_status(
@@ -141,4 +170,5 @@ async def run_execution(execution_id: uuid.UUID) -> None:
                 db, execution_id, status=status, error_message=error_message, mark_completed=True
             )
     finally:
+        clear_cancellation(execution_id)
         clear_execution_context()

@@ -6,7 +6,7 @@ from sqlalchemy import select
 
 from agents.graph import GraphDependencies, build_graph
 from agents.llm_client import MalformedLLMOutputError
-from agents.schemas import DeveloperPlan, Plan, ProposedWrite, ReviewResult
+from agents.schemas import DeveloperPlan, Plan, ReviewResult
 from agents.state import ExecutionState
 from backend.app.db.models.agent_step import AgentStep, AgentStepStatus
 from backend.app.db.repositories.executions import create_execution
@@ -37,11 +37,10 @@ async def test_graph_happy_path_reaches_reviewer_and_persists_agent_steps(
     llm = FakeStructuredLLMClient(
         {
             "Plan": Plan(objective="add hello", steps=["write hello.txt"], testing_strategy="manual"),
-            "DeveloperPlan": DeveloperPlan(
-                summary="created hello.txt", writes=[ProposedWrite(path="hello.txt", content="hi")]
-            ),
+            "DeveloperPlan": DeveloperPlan(summary="created hello.txt"),
             "ReviewResult": ReviewResult(verdict="approved", summary="looks fine"),
-        }
+        },
+        tool_call_scripts=[[("write_file", {"path": "hello.txt", "content": "hi"})]],
     )
 
     deps = GraphDependencies(

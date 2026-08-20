@@ -19,29 +19,22 @@ class Plan(BaseModel):
     steps: list[str]
     testing_strategy: str
     risks: list[str] = Field(default_factory=list)
-
-
-class ProposedEdit(BaseModel):
-    """A deterministic unique-match replacement, applied via the `edit_file` tool."""
-
-    path: str
-    old_string: str
-    new_string: str
-
-
-class ProposedWrite(BaseModel):
-    """A full file write (new file or full replacement), applied via `write_file`."""
-
-    path: str
-    content: str
+    # A glob (relative to the workspace root, e.g. "dist/*.whl") for a build
+    # artifact this task is expected to produce, if any. None means no
+    # artifact is expected — the execution completes normally either way.
+    expected_artifact_glob: str | None = None
 
 
 class DeveloperPlan(BaseModel):
-    """The Developer LLM's structured decision about what to change."""
+    """The Developer LLM's final summary after its tool-calling turn.
+
+    Unlike Phase 1.3/1.4, edits/writes are no longer a separate listed
+    decision the agent applies afterward — the LLM makes those tool calls
+    itself during `generate_with_tools`'s loop (see `agents/developer.py`);
+    this is just its closing summary of what it did.
+    """
 
     summary: str
-    edits: list[ProposedEdit] = Field(default_factory=list)
-    writes: list[ProposedWrite] = Field(default_factory=list)
 
 
 class FileChange(BaseModel):

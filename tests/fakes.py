@@ -11,6 +11,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
+from agents.llm_client import ToolCallStep
 from tools.execution_result import ToolExecutionResult
 
 
@@ -20,20 +21,68 @@ class FakeStructuredLLMClient:
     in order — needed for tests where the same agent role is called more
     than once with different expected behavior each time (e.g. a debug
     loop: Developer's first pass should do nothing, its second pass after
-    Debugger should apply the real fix)."""
+    Debugger should apply the real fix).
+
+    `tool_call_scripts` is a queue of *per-call* scripts: each call to
+    `generate_with_tools` pops the next inner list and replays exactly
+    those `(tool_name, tool_input)` pairs against the real `tool_runner`
+    it's given, before returning the final structured result from
+    `responses`/`default` — simulating a multi-turn tool-calling LLM
+    without needing a real model. Popping one script per call (rather than
+    draining one shared queue) is what makes it possible to script, e.g., a
+    debug loop where Developer's first turn does nothing, Debugger's turn
+    investigates, and Developer's second turn applies the real fix — three
+    separate `generate_with_tools` calls, three separate scripts. A test
+    with only one such call can pass a single-item list.
+    """
 
     def __init__(
         self,
         responses: dict[str, BaseModel | Exception | list[BaseModel | Exception]] | None = None,
         *,
         default: BaseModel | None = None,
+        tool_call_scripts: list[list[tuple[str, dict]]] | None = None,
     ) -> None:
         self._responses = responses or {}
         self._default = default
+        self._tool_call_scripts = list(tool_call_scripts or [])
         self.calls: list[tuple[str, str, type]] = []
+        self.tool_loop_calls: list[dict] = []
 
     async def generate(self, *, system: str, user: str, output_model: type) -> Any:
         self.calls.append((system, user, output_model))
+        return self._resolve(output_model)
+
+    async def generate_with_tools(
+        self,
+        *,
+        system: str,
+        user: str,
+        output_model: type,
+        tool_runner: Any,
+        max_tool_calls: int,
+    ) -> tuple[Any, list[ToolCallStep]]:
+        self.tool_loop_calls.append({"system": system, "user": user, "output_model": output_model})
+        steps: list[ToolCallStep] = []
+
+        script = self._tool_call_scripts.pop(0) if self._tool_call_scripts else []
+        for tool_name, tool_input in script[:max_tool_calls]:
+            result = await tool_runner.call(tool_name, tool_input)
+            steps.append(
+                ToolCallStep(
+                    tool_name=tool_name,
+                    tool_input=tool_input,
+                    status=result.status,
+                    output=result.output,
+                    error=result.error,
+                    duration_ms=result.duration_ms,
+                )
+            )
+
+        final = self._resolve(output_model)
+        return final, steps
+
+    def _resolve(self, output_model: type) -> Any:
         key = output_model.__name__
         if key in self._responses:
             value = self._responses[key]
@@ -76,3 +125,9 @@ class FakeToolRunner:
 
     def available_tools(self) -> set[str]:
         return set(self._allowed)
+
+    def tool_schemas(self) -> list[dict]:
+        return [
+            {"type": "function", "function": {"name": name, "description": "", "parameters": {}}}
+            for name in sorted(self._allowed)
+        ]

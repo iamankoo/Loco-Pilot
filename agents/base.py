@@ -16,6 +16,8 @@ from agents.llm_client import StructuredLLMClient
 from agents.state import ExecutionState
 from tools.execution_result import ToolExecutionResult
 
+DEFAULT_MAX_TOOL_CALLS = 12
+
 
 class ToolRunner(Protocol):
     async def call(self, tool_name: str, tool_input: dict) -> ToolExecutionResult: ...
@@ -26,13 +28,26 @@ class ToolRunner(Protocol):
         exists yet, instead of assuming or fabricating."""
         ...
 
+    def tool_schemas(self) -> list[dict]:
+        """OpenAI-function-calling-format schemas for this agent's actually
+        permitted tools — what `generate_with_tools` binds to the model.
+        Never includes a tool outside the agent's granted permission set."""
+        ...
+
 
 class BaseAgent(ABC):
     name: str
 
-    def __init__(self, *, llm_client: StructuredLLMClient | None, tools: ToolRunner) -> None:
+    def __init__(
+        self,
+        *,
+        llm_client: StructuredLLMClient | None,
+        tools: ToolRunner,
+        max_tool_calls: int = DEFAULT_MAX_TOOL_CALLS,
+    ) -> None:
         self.llm_client = llm_client
         self.tools = tools
+        self.max_tool_calls = max_tool_calls
 
     @abstractmethod
     async def run(self, state: ExecutionState) -> dict:

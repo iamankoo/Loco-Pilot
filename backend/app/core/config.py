@@ -57,6 +57,16 @@ class Settings(BaseSettings):
 
     # ---- Agent execution ----
     max_debug_retries: int = 2
+    # Bounds on the LLM-driven tool-calling loop (Developer/Debugger): how
+    # many tool calls one agent turn may make, how many an entire execution
+    # may make in total across every agent turn, and a hard wall-clock cap
+    # on the whole graph run. All exist so a malformed or adversarial
+    # model response can never produce an unbounded autonomous loop.
+    max_tool_calls_per_agent: int = 12
+    max_total_tool_calls: int = 60
+    max_execution_seconds: int = 900
+    # Character budget for RAG context handed to any single agent prompt.
+    max_context_chars: int = 12_000
 
     # ---- Logging ----
     log_level: str = "INFO"

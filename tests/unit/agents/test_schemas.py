@@ -16,12 +16,13 @@ def test_plan_defaults() -> None:
     assert plan.assumptions == []
     assert plan.files_likely_involved == []
     assert plan.risks == []
+    assert plan.expected_artifact_glob is None
 
 
-def test_developer_plan_defaults_empty() -> None:
-    plan = DeveloperPlan(summary="no-op")
-    assert plan.edits == []
-    assert plan.writes == []
+def test_developer_plan_requires_summary() -> None:
+    with pytest.raises(ValidationError):
+        DeveloperPlan()
+    assert DeveloperPlan(summary="no-op").summary == "no-op"
 
 
 def test_file_change_rejects_invalid_change_type() -> None:

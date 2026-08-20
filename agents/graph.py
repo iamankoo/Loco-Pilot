@@ -6,7 +6,11 @@ Each agent node is a thin persistence wrapper (`make_agent_node`) around a
 permission-scoped `BoundToolRunner` for that agent, runs it, and records
 success/failure — the actual reasoning lives in `agents.<role>`, not here.
 This file owns every SQLAlchemy-touching concern in the agent pipeline;
-individual agents never see a DB session (see `agents.base`).
+individual agents never see a DB session (see `agents.base`). It also owns
+the bounded-autonomy machinery Phase 1.5 adds: per-agent and
+execution-wide tool-call budgets, cancellation checks between node
+transitions, stage-specific RAG re-retrieval, and incremental
+re-indexing of files Developer actually changed.
 """
 
 from __future__ import annotations
@@ -38,8 +42,11 @@ from backend.app.core.logging import bind_execution_context, get_logger
 from backend.app.db.models.agent_step import AgentStepStatus
 from backend.app.db.repositories.agent_steps import complete_agent_step, create_agent_step
 from backend.app.security.secret_scrubber import scrub_secrets
+from backend.app.services.artifact_service import collect_artifacts
+from backend.app.services.cancellation import is_cancelled
 from backend.app.services.tool_execution import BoundToolRunner
 from rag.embeddings.base import EmbeddingProvider
+from rag.ingestion.indexer import RepositoryIndexer
 from rag.retrieval.context_builder import build_context
 from rag.retrieval.retriever import Retriever
 from tools.base import Permission, ToolContext
@@ -47,6 +54,16 @@ from tools.registry import ToolRegistry
 from tools.workspace import Workspace
 
 logger = get_logger(component="graph")
+
+# Debugger is granted WRITE at the permission-table level (see
+# agents/permissions.py) but this implementation only ever investigates —
+# its tool-calling loop is scoped to these read-only tool names.
+_DEBUGGER_TOOL_NAMES = {"read_file", "search_files", "list_directory", "git_status", "git_diff"}
+
+# Which agent roles benefit from a stage-specific RAG re-retrieval beyond
+# the Orchestrator's initial task-based retrieval (Planner already
+# consumes that one).
+_TOOL_LOOP_AGENTS = {"developer", "debugger"}
 
 
 @dataclass
@@ -57,6 +74,9 @@ class GraphDependencies:
     db: AsyncSession | None = None
     max_debug_retries: int = 2
     retrieval_top_k: int = 8
+    max_tool_calls_per_agent: int = 12
+    max_total_tool_calls: int = 60
+    max_context_chars: int = 12_000
 
 
 def _summarize(value: object) -> object:
@@ -70,18 +90,83 @@ def _summarize(value: object) -> object:
 
 
 def _build_tool_runner(
-    state: ExecutionState, deps: GraphDependencies, permissions: set[Permission], agent_step_id: str | None
+    state: ExecutionState,
+    deps: GraphDependencies,
+    permissions: set[Permission],
+    agent_step_id: str | None,
+    *,
+    allowed_tool_names: set[str] | None = None,
 ) -> BoundToolRunner:
     workspace = Workspace.at(state.workspace_root)
     context = ToolContext(workspace=workspace, execution_id=state.execution_id, agent_step_id=agent_step_id)
-    return BoundToolRunner(registry=deps.registry, context=context, permissions=permissions, db=deps.db)
+    return BoundToolRunner(
+        registry=deps.registry,
+        context=context,
+        permissions=permissions,
+        db=deps.db,
+        allowed_tool_names=allowed_tool_names,
+    )
+
+
+def _retrieval_query_for(agent_name: str, state: ExecutionState) -> str | None:
+    """Query construction changes per agent stage: Developer retrieves
+    against the task + plan steps it's about to implement; Debugger
+    retrieves against the task + the actual failure it needs to diagnose.
+    Planner already receives the Orchestrator's initial task-based
+    retrieval, so it isn't repeated here."""
+    if agent_name == "developer" and state.plan is not None:
+        return f"{state.user_task}\n" + "\n".join(state.plan.steps)
+    if agent_name == "debugger" and state.test_results is not None:
+        return f"{state.user_task}\n{state.test_results.summary}\n" + "\n".join(state.test_results.errors)
+    return None
+
+
+async def _retrieve_stage_context(agent_name: str, state: ExecutionState, deps: GraphDependencies):
+    query = _retrieval_query_for(agent_name, state)
+    if query is None or deps.db is None:
+        return None
+    try:
+        retriever = Retriever(deps.embedding_provider)
+        chunks = await retriever.retrieve(
+            query, project_id=uuid.UUID(state.project_id), db=deps.db, top_k=deps.retrieval_top_k
+        )
+        return build_context(chunks, max_chars=deps.max_context_chars)
+    except Exception as exc:  # noqa: BLE001 - retrieval failure must not abort the agent turn
+        logger.warning("stage_retrieval_failed", agent=agent_name, error=str(exc))
+        return None
+
+
+async def _reindex_changed_files(state: ExecutionState, update: dict, deps: GraphDependencies) -> None:
+    if deps.db is None:
+        return
+    files_changed = update.get("files_changed") or []
+    changed_paths = [f.path for f in files_changed if f.change_type in ("created", "modified")]
+    if not changed_paths:
+        return
+    try:
+        workspace = Workspace.at(state.workspace_root)
+        indexer = RepositoryIndexer(deps.embedding_provider)
+        for path in changed_paths:
+            await indexer.index_file(workspace, uuid.UUID(state.project_id), path, deps.db)
+        logger.info("incremental_reindex_completed", files=len(changed_paths))
+    except Exception as exc:  # noqa: BLE001 - a reindex failure must not fail the agent turn that just succeeded
+        logger.warning("incremental_reindex_failed", error=str(exc))
 
 
 def make_agent_node(
     agent_cls: type[BaseAgent], permissions: set[Permission], deps: GraphDependencies
 ) -> Callable[[ExecutionState], "object"]:
+    allowed_tool_names = _DEBUGGER_TOOL_NAMES if agent_cls.name == "debugger" else None
+
     async def node(state: ExecutionState) -> dict:
         bind_execution_context(execution_id=state.execution_id, agent=agent_cls.name)
+
+        if is_cancelled(uuid.UUID(state.execution_id)):
+            return {
+                "current_agent": agent_cls.name,
+                "execution_status": "cancelled",
+                "messages": ["Execution cancelled before " + agent_cls.name + " started."],
+            }
 
         step = None
         if deps.db is not None:
@@ -92,11 +177,22 @@ def make_agent_node(
                 input_metadata={"execution_status": state.execution_status, "retry_count": state.retry_count},
             )
 
-        tools = _build_tool_runner(state, deps, permissions, str(step.id) if step else None)
-        agent = agent_cls(llm_client=deps.llm_client, tools=tools)
+        run_state = state
+        if agent_cls.name in _TOOL_LOOP_AGENTS:
+            fresh_context = await _retrieve_stage_context(agent_cls.name, state, deps)
+            if fresh_context is not None:
+                run_state = state.model_copy(update={"repository_context": fresh_context})
+
+        tools = _build_tool_runner(
+            state, deps, permissions, str(step.id) if step else None, allowed_tool_names=allowed_tool_names
+        )
+
+        remaining_total = max(0, deps.max_total_tool_calls - len(state.tool_calls))
+        max_tool_calls = min(deps.max_tool_calls_per_agent, remaining_total)
+        agent = agent_cls(llm_client=deps.llm_client, tools=tools, max_tool_calls=max_tool_calls)
 
         try:
-            update = await agent.run(state)
+            update = await agent.run(run_state)
         except Exception as exc:  # noqa: BLE001 - agent failures become structured state, never crash the graph
             logger.exception("agent_failed", agent=agent_cls.name)
             if step is not None:
@@ -109,6 +205,12 @@ def make_agent_node(
                 "errors": [f"{agent_cls.name}: {exc}"],
                 "messages": [f"{agent_cls.name}: failed — {exc}"],
             }
+
+        if agent_cls.name == "developer":
+            await _reindex_changed_files(state, update, deps)
+
+        if run_state is not state and "repository_context" not in update:
+            update["repository_context"] = run_state.repository_context
 
         if step is not None:
             output_summary = scrub_secrets({k: _summarize(v) for k, v in update.items()})
@@ -133,7 +235,7 @@ def make_orchestrator_node(deps: GraphDependencies) -> Callable[[ExecutionState]
                     db=deps.db,
                     top_k=deps.retrieval_top_k,
                 )
-                repository_context = build_context(chunks)
+                repository_context = build_context(chunks, max_chars=deps.max_context_chars)
             except Exception as exc:  # noqa: BLE001 - retrieval failure must not abort the whole execution
                 logger.warning("retrieval_failed", error=str(exc))
 
@@ -157,8 +259,24 @@ def make_orchestrator_node(deps: GraphDependencies) -> Callable[[ExecutionState]
 def make_finalize_node(deps: GraphDependencies) -> Callable[[ExecutionState], "object"]:
     async def node(state: ExecutionState) -> dict:
         final_status = state.execution_status
-        if final_status not in ("passed", "failed", "error"):
+        if final_status not in ("passed", "failed", "error", "cancelled", "timed_out"):
             final_status = "failed"
+
+        artifact_count = 0
+        if (
+            deps.db is not None
+            and state.plan is not None
+            and state.plan.expected_artifact_glob
+            and final_status == "passed"
+        ):
+            try:
+                workspace = Workspace.at(state.workspace_root)
+                artifacts = await collect_artifacts(
+                    workspace, state.plan.expected_artifact_glob, uuid.UUID(state.execution_id), deps.db
+                )
+                artifact_count = len(artifacts)
+            except Exception as exc:  # noqa: BLE001 - artifact collection must not fail a finished execution
+                logger.warning("artifact_collection_failed", error=str(exc))
 
         final_result = {
             "status": final_status,
@@ -170,6 +288,8 @@ def make_finalize_node(deps: GraphDependencies) -> Callable[[ExecutionState], "o
             "files_changed": [f.model_dump(mode="json") for f in state.files_changed],
             "test_status": state.test_results.status if state.test_results else "unavailable",
             "retry_count": state.retry_count,
+            "tool_call_count": len(state.tool_calls),
+            "artifact_count": artifact_count,
         }
 
         return {"final_result": final_result, "current_agent": "orchestrator", "execution_status": final_status}
@@ -178,15 +298,15 @@ def make_finalize_node(deps: GraphDependencies) -> Callable[[ExecutionState], "o
 
 
 def route_after_planner(state: ExecutionState) -> str:
-    return "finalize" if state.execution_status == "error" else "developer"
+    return "finalize" if state.execution_status in ("error", "cancelled") else "developer"
 
 
 def route_after_developer(state: ExecutionState) -> str:
-    return "finalize" if state.execution_status == "error" else "tester"
+    return "finalize" if state.execution_status in ("error", "cancelled") else "tester"
 
 
 def route_after_tester(state: ExecutionState, max_retries: int) -> str:
-    if state.execution_status == "error":
+    if state.execution_status in ("error", "cancelled"):
         return "finalize"
     if (
         state.test_results is not None
@@ -198,7 +318,7 @@ def route_after_tester(state: ExecutionState, max_retries: int) -> str:
 
 
 def route_after_debugger(state: ExecutionState) -> str:
-    return "finalize" if state.execution_status == "error" else "developer"
+    return "finalize" if state.execution_status in ("error", "cancelled") else "developer"
 
 
 def build_graph(deps: GraphDependencies):
