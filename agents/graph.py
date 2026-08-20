@@ -37,6 +37,7 @@ from agents.tester import TesterAgent
 from backend.app.core.logging import bind_execution_context, get_logger
 from backend.app.db.models.agent_step import AgentStepStatus
 from backend.app.db.repositories.agent_steps import complete_agent_step, create_agent_step
+from backend.app.security.secret_scrubber import scrub_secrets
 from backend.app.services.tool_execution import BoundToolRunner
 from rag.embeddings.base import EmbeddingProvider
 from rag.retrieval.context_builder import build_context
@@ -99,7 +100,9 @@ def make_agent_node(
         except Exception as exc:  # noqa: BLE001 - agent failures become structured state, never crash the graph
             logger.exception("agent_failed", agent=agent_cls.name)
             if step is not None:
-                await complete_agent_step(deps.db, step.id, status=AgentStepStatus.FAILED, error_message=str(exc))
+                await complete_agent_step(
+                    deps.db, step.id, status=AgentStepStatus.FAILED, error_message=scrub_secrets(str(exc))
+                )
             return {
                 "current_agent": agent_cls.name,
                 "execution_status": "error",
@@ -108,7 +111,7 @@ def make_agent_node(
             }
 
         if step is not None:
-            output_summary = {k: _summarize(v) for k, v in update.items()}
+            output_summary = scrub_secrets({k: _summarize(v) for k, v in update.items()})
             await complete_agent_step(deps.db, step.id, status=AgentStepStatus.SUCCEEDED, output_metadata=output_summary)
 
         return update

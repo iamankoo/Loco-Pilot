@@ -84,11 +84,20 @@ def test_default_registry_has_expected_tools() -> None:
     assert expected <= names
 
 
-def test_default_registry_excludes_git_commit_and_execute_tools() -> None:
+def test_default_registry_excludes_git_commit() -> None:
     registry = build_default_registry()
     names = {t.name for t in registry.list_tools()}
     assert "git_commit" not in names
-    assert not any(t.permission == Permission.EXECUTE for t in registry.list_tools())
+
+
+def test_default_registry_includes_the_execute_terminal_command_tool() -> None:
+    """As of Phase 1.4, a real Docker-backed execute-capable tool is
+    registered — see tests/unit/tools/test_terminal_contract.py for
+    confirmation that the internal-only LocalDevTerminalExecutor is
+    specifically not what backs it."""
+    registry = build_default_registry()
+    tool = registry.get("execute_terminal_command")
+    assert tool.permission == Permission.EXECUTE
 
 
 def test_read_only_permission_set_excludes_write_tools() -> None:

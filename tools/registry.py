@@ -60,12 +60,11 @@ FULL_ACCESS: set[Permission] = {Permission.READ, Permission.WRITE, Permission.GI
 
 
 def build_default_registry() -> ToolRegistry:
-    """Constructs the registry with every Phase 1.2 tool registered.
+    """Constructs the registry with every tool registered.
 
-    Deliberately excludes: `git_commit` (interface exists, not yet exposed
-    for agent use) and any terminal/execute tool (Phase 1.2 only defines
-    the terminal contract; nothing implementing `Permission.EXECUTE` is
-    registered until the Phase 1.3 Docker sandbox exists).
+    Deliberately excludes `git_commit` — interface exists, not yet exposed
+    for agent use. As of Phase 1.4, `execute_terminal_command` IS
+    registered, backed by the real Docker sandbox (`execution.docker`).
     """
     from tools.filesystem.tools import (
         EditFileTool,
@@ -80,6 +79,7 @@ def build_default_registry() -> ToolRegistry:
         GitDiffTool,
         GitStatusTool,
     )
+    from tools.terminal.tools import ExecuteTerminalCommandTool
 
     registry = ToolRegistry()
     for tool in (
@@ -92,6 +92,7 @@ def build_default_registry() -> ToolRegistry:
         GitDiffTool(),
         GitBranchTool(),
         GitCreateBranchTool(),
+        ExecuteTerminalCommandTool(),
     ):
         registry.register(tool)
     return registry

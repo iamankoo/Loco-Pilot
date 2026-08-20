@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.core.logging import get_logger
 from backend.app.db.repositories.tool_calls import create_tool_call
+from backend.app.security.secret_scrubber import scrub_secrets
 from tools.base import Permission, ToolContext, ToolError, ToolPermissionError
 from tools.execution_result import ToolExecutionResult
 from tools.registry import ToolRegistry
@@ -69,16 +70,20 @@ async def execute_tool(
     )
 
     if db is not None and context.execution_id is not None:
+        # Secret scrubbing happens here, before anything reaches the
+        # database — the ToolExecutionResult returned to the caller below
+        # is NOT scrubbed, so the agent still reasons over full-fidelity
+        # output (e.g. to remove a hardcoded secret it just found).
         await create_tool_call(
             db,
             execution_id=uuid.UUID(context.execution_id),
             agent_step_id=uuid.UUID(context.agent_step_id) if context.agent_step_id else None,
             tool_name=tool_name,
-            input=tool_input,
-            output=output_payload,
+            input=scrub_secrets(tool_input),
+            output=scrub_secrets(output_payload) if output_payload is not None else None,
             status=status,
             duration_ms=duration_ms,
-            error_message=error_message,
+            error_message=scrub_secrets(error_message) if error_message is not None else None,
         )
 
     return ToolExecutionResult(

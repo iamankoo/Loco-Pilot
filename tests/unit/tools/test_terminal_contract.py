@@ -63,9 +63,14 @@ async def test_request_exceeding_policy_timeout_rejected(tmp_workspace: Workspac
         await executor.run(request)
 
 
-def test_local_executor_is_not_in_default_registry() -> None:
+def test_registered_execute_tool_is_docker_backed_not_the_local_dev_executor() -> None:
+    """LocalDevTerminalExecutor (this file's `executor` fixture) is
+    internal-only, used by the tests above for the timeout/output-limit/
+    cwd-validation contract — it must never be what an agent-facing tool
+    actually runs. The registered `execute_terminal_command` tool
+    (Phase 1.4) uses `DockerTerminalExecutor` instead."""
     from tools.registry import build_default_registry
+    from tools.terminal.tools import ExecuteTerminalCommandTool
 
-    names = {t.name for t in build_default_registry().list_tools()}
-    assert "execute_terminal_command" not in names
-    assert "terminal" not in names
+    tool = build_default_registry().get("execute_terminal_command")
+    assert isinstance(tool, ExecuteTerminalCommandTool)

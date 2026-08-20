@@ -13,7 +13,10 @@ from tools.base import Permission
 
 PLANNER_PERMISSIONS: set[Permission] = {Permission.READ}
 DEVELOPER_PERMISSIONS: set[Permission] = {Permission.READ, Permission.WRITE}
-TESTER_PERMISSIONS: set[Permission] = {Permission.READ}  # + Permission.EXECUTE once Phase 1.4's sandbox exists
+# EXECUTE added in Phase 1.4 — execute_terminal_command now exists, backed
+# by the real Docker sandbox, so Tester's already-written "available" path
+# (agents/tester.py) activates without any change to that agent's code.
+TESTER_PERMISSIONS: set[Permission] = {Permission.READ, Permission.EXECUTE}
 DEBUGGER_PERMISSIONS: set[Permission] = {Permission.READ, Permission.WRITE}
 REVIEWER_PERMISSIONS: set[Permission] = {Permission.READ}
 # Orchestrator gets no tool access at all — it only routes and persists state.

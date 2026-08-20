@@ -15,9 +15,16 @@ from tools.execution_result import ToolExecutionResult
 
 
 class FakeStructuredLLMClient:
+    """`responses[ModelName]` may be a single BaseModel/Exception (returned
+    every time that model type is requested) or a `list` of them, consumed
+    in order — needed for tests where the same agent role is called more
+    than once with different expected behavior each time (e.g. a debug
+    loop: Developer's first pass should do nothing, its second pass after
+    Debugger should apply the real fix)."""
+
     def __init__(
         self,
-        responses: dict[str, BaseModel | Exception] | None = None,
+        responses: dict[str, BaseModel | Exception | list[BaseModel | Exception]] | None = None,
         *,
         default: BaseModel | None = None,
     ) -> None:
@@ -30,6 +37,10 @@ class FakeStructuredLLMClient:
         key = output_model.__name__
         if key in self._responses:
             value = self._responses[key]
+            if isinstance(value, list):
+                if not value:
+                    raise AssertionError(f"FakeStructuredLLMClient: response queue for {key} exhausted")
+                value = value.pop(0)
             if isinstance(value, Exception):
                 raise value
             return value
