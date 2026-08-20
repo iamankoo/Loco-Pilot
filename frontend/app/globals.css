@@ -1,0 +1,54 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    @apply border-line;
+  }
+
+  html {
+    color-scheme: dark;
+  }
+
+  body {
+    @apply bg-ground text-ivory font-sans antialiased;
+    background-image:
+      radial-gradient(ellipse 80% 50% at 50% -10%, rgba(198, 161, 91, 0.08), transparent),
+      radial-gradient(ellipse 60% 40% at 100% 100%, rgba(198, 161, 91, 0.04), transparent);
+    background-attachment: fixed;
+  }
+
+  ::selection {
+    background-color: rgba(198, 161, 91, 0.25);
+    color: #efe9dd;
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background-color: rgba(239, 233, 221, 0.12);
+    border-radius: 999px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+}
+
+@layer utilities {
+  .grain-overlay {
+    background-image: url("/grain.svg");
+    background-size: 200px 200px;
+    pointer-events: none;
+  }
+
+  .text-balance {
+    text-wrap: balance;
+  }
+}

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.db.models.artifact import Artifact
@@ -25,3 +26,13 @@ async def create_artifact(
     await db.commit()
     await db.refresh(artifact)
     return artifact
+
+
+async def list_artifacts_for_execution(db: AsyncSession, execution_id: uuid.UUID) -> list[Artifact]:
+    stmt = (
+        select(Artifact)
+        .where(Artifact.execution_id == execution_id)
+        .order_by(Artifact.created_at.asc())
+    )
+    result = await db.execute(stmt)
+    return list(result.scalars().all())

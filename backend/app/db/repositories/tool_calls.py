@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.db.models.tool_call import ToolCall
@@ -34,3 +35,23 @@ async def create_tool_call(
     await db.commit()
     await db.refresh(tool_call)
     return tool_call
+
+
+async def list_tool_calls_for_execution(
+    db: AsyncSession, execution_id: uuid.UUID, *, limit: int = 50, offset: int = 0
+) -> list[ToolCall]:
+    stmt = (
+        select(ToolCall)
+        .where(ToolCall.execution_id == execution_id)
+        .order_by(ToolCall.created_at.asc())
+        .limit(limit)
+        .offset(offset)
+    )
+    result = await db.execute(stmt)
+    return list(result.scalars().all())
+
+
+async def count_tool_calls_for_execution(db: AsyncSession, execution_id: uuid.UUID) -> int:
+    stmt = select(func.count()).select_from(ToolCall).where(ToolCall.execution_id == execution_id)
+    result = await db.execute(stmt)
+    return result.scalar_one()

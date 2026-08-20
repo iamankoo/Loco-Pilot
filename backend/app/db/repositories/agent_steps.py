@@ -3,6 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.db.models.agent_step import AgentStep, AgentStepStatus
@@ -48,3 +49,13 @@ async def complete_agent_step(
     await db.commit()
     await db.refresh(step)
     return step
+
+
+async def list_agent_steps_for_execution(db: AsyncSession, execution_id: uuid.UUID) -> list[AgentStep]:
+    stmt = (
+        select(AgentStep)
+        .where(AgentStep.execution_id == execution_id)
+        .order_by(AgentStep.created_at.asc())
+    )
+    result = await db.execute(stmt)
+    return list(result.scalars().all())
