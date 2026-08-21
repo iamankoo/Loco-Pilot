@@ -3,3 +3,6 @@ name = "feature-fixture"
 version = "0.1.0"
 description = "Minimal deterministic fixture project used to prove LocoPilot's feature-task loop (Planner -> Developer -> Tester -> Reviewer) end to end."
 requires-python = ">=3.10"
+dependencies = [
+    "pytest>=8.0",
+]

@@ -46,8 +46,15 @@ async def test_debugger_increments_retry_count() -> None:
     assert "off by one" in update["messages"][0]
     # The structured finding itself must be explicit state, not just folded
     # into the free-text message trail — Developer's retry prompt relies on
-    # reading `debug_result` directly (see agents/developer.py).
-    assert update["debug_result"] is debug_result
+    # reading `debug_result` directly (see agents/developer.py). Phase 2.7
+    # overrides failure_class/attempt_number/files_inspected/status with
+    # deterministically-derived values, so the returned object is a copy,
+    # not the same instance — the model-provided fields still match.
+    assert update["debug_result"].root_cause == debug_result.root_cause
+    assert update["debug_result"].proposed_fix == debug_result.proposed_fix
+    assert update["debug_result"].files_to_change == debug_result.files_to_change
+    assert update["debug_result"].attempt_number == 1
+    assert update["debug_result"] in update["debug_attempts"]
 
 
 async def test_debugger_never_calls_a_write_tool() -> None:

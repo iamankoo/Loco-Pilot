@@ -129,6 +129,18 @@ Next.js dashboard  ──HTTP──>  FastAPI (backend/app)
   failing test names are always parsed deterministically from the real
   exit code and output of the actual command that ran inside the Docker
   sandbox — never from an LLM's reading of the output.
+- **Debugger** (`agents/debugger.py`): classifies the real `TestResult`
+  into a `failure_class` (syntax/import/dependency/assertion/type/build/
+  environment/timeout/... error) via `agents/failure_classification.py`
+  — a deterministic regex match over the real output, never an LLM
+  guess — before investigating. Every prior attempt in the current retry
+  cycle (`state.debug_attempts`) is shown in its prompt so it doesn't
+  repeat an already-unsuccessful strategy; Tester patches each attempt's
+  outcome to "fixed"/"unresolved" once the fix is actually re-tested,
+  since that's only knowable after Debugger's own turn ends.
+  `MAX_DEBUG_RETRIES` remains the sole termination authority (unchanged
+  from Phase 2.1) — attempt history is additional context and
+  observability, not a second loop-control mechanism.
 - **Persistence** (`backend/app/db/`): SQLAlchemy async models + Alembic
   migrations for projects, executions, agent steps, tool calls, and
   artifacts. Secrets are scrubbed (`backend/app/security/secret_scrubber.py`)

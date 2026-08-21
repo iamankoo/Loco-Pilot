@@ -68,6 +68,14 @@ class ExecutionState(BaseModel):
     # like `plan`/`test_results`/`review_result`: only ever meaningful for
     # the retry cycle currently in progress.
     debug_result: DebugResult | None = None
+    # The full debug-attempt history across every retry cycle, oldest
+    # first — Debugger appends its own new attempt each turn; Tester's
+    # subsequent turn patches the most recent entry's `status` to
+    # "fixed"/"unresolved" once the real re-test result is known (see
+    # `agents/tester.py`). A plain (not `operator.add`-accumulated) field,
+    # like `plan`/`test_results`, because Tester's patch needs to replace
+    # one existing entry, not just append.
+    debug_attempts: list[DebugResult] = Field(default_factory=list)
     review_result: ReviewResult | None = None
     final_result: dict | None = None
     execution_status: ExecutionStatusLiteral = "pending"

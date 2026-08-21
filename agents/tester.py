@@ -14,6 +14,12 @@ the output. An LLM is not needed for this agent's core correctness at
 all; passed/failed/skipped counts and failing test names are parsed from
 the real stdout/stderr via lightweight, best-effort patterns common
 across pytest/Jest/Mocha/cargo test, not invented.
+
+Phase 2.7: whenever this turn follows a Debugger attempt, the most recent
+`debug_attempts` entry's `status` is patched here to "fixed"/"unresolved"
+based on the real, just-computed `TestResult` — the outcome of a debug
+attempt is only knowable once the fix is actually re-tested, which always
+happens on Tester's next turn, never on Debugger's own.
 """
 
 from __future__ import annotations
@@ -101,6 +107,26 @@ def _parse_failing_tests(output: str) -> list[str]:
 _PYTEST_MARKER_FILES = {"pyproject.toml", "pytest.ini", "setup.py"}
 
 
+_RESOLVED_DEBUG_STATUSES = ("fixed", "unresolved")
+
+
+def _patch_last_debug_attempt(state: ExecutionState, test_result: TestResult) -> list | None:
+    """Returns an updated `debug_attempts` list with the most recent entry's
+    `status` set to "fixed" (real test passed) or "unresolved" (anything
+    else) — regardless of whether Debugger's own turn called it
+    "diagnosed", "blocked", or "no_fix_needed": whatever it concluded, the
+    real outcome is still whether the very next test run actually passed.
+    Returns `None` when there is no pending attempt to patch (no debug
+    history yet, or it was already resolved by an earlier Tester turn)."""
+    if not state.debug_attempts:
+        return None
+    last = state.debug_attempts[-1]
+    if last.status in _RESOLVED_DEBUG_STATUSES:
+        return None
+    outcome = "fixed" if test_result.status == "passed" else "unresolved"
+    return state.debug_attempts[:-1] + [last.model_copy(update={"status": outcome})]
+
+
 def _pick_framework(test_frameworks: list[str], config_files: list[str]) -> str | None:
     # `analysis.detection` falls back to declaring "unittest" whenever
     # Python test files exist but no framework dependency is declared
@@ -128,13 +154,15 @@ class TesterAgent(BaseAgent):
 
         if execution_tool is None:
             return self._unavailable(
+                state,
                 "Test execution is not available: no sandboxed, execute-capable tool is "
-                "registered for this agent."
+                "registered for this agent.",
             )
 
         framework, command = await self._determine_command(state)
         if framework is None or command is None:
             return self._unavailable(
+                state,
                 "Could not determine an appropriate test command: no recognized test framework "
                 "or project marker file was found in the workspace."
             )
@@ -162,12 +190,16 @@ class TesterAgent(BaseAgent):
         else:
             test_result = self._interpret(framework, command_str, result.output)
 
-        return {
+        update = {
             "test_results": test_result,
             "current_agent": self.name,
             "execution_status": "reviewing",
             "messages": [f"Tester: {test_result.summary}"],
         }
+        debug_attempts = _patch_last_debug_attempt(state, test_result)
+        if debug_attempts is not None:
+            update["debug_attempts"] = debug_attempts
+        return update
 
     def _interpret(self, framework: str, command_str: str, output: dict) -> TestResult:
         """Status is always derived from the real exit code/timeout —
@@ -259,11 +291,15 @@ class TesterAgent(BaseAgent):
                 return framework, command
         return None, None
 
-    def _unavailable(self, summary: str) -> dict:
+    def _unavailable(self, state: ExecutionState, summary: str) -> dict:
         test_result = TestResult(status="unavailable", commands=[], passed=0, failed=0, errors=[], summary=summary)
-        return {
+        update = {
             "test_results": test_result,
             "current_agent": self.name,
             "execution_status": "reviewing",
             "messages": [f"Tester: {summary}"],
         }
+        debug_attempts = _patch_last_debug_attempt(state, test_result)
+        if debug_attempts is not None:
+            update["debug_attempts"] = debug_attempts
+        return update

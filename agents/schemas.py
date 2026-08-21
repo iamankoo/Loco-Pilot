@@ -75,6 +75,34 @@ class DebugResult(BaseModel):
     proposed_fix: str
     confidence: Literal["low", "medium", "high"]
     files_to_change: list[str] = Field(default_factory=list)
+    # Phase 2.7 additions — all defaulted so every existing
+    # `DebugResult(root_cause=..., proposed_fix=..., confidence=...)`
+    # construction site remains valid unchanged.
+    #
+    # A fuller narrative of what investigation actually found, distinct
+    # from the terse `root_cause` conclusion.
+    diagnosis: str = ""
+    # Always computed deterministically from the real TestResult (see
+    # `agents.failure_classification`), never left to the LLM's guess —
+    # the actual test result is the authoritative evidence, the model
+    # only assists with the narrative root_cause/proposed_fix.
+    failure_class: Literal[
+        "syntax_error", "import_error", "dependency_error", "assertion_failure",
+        "type_error", "runtime_error", "configuration_error", "test_failure",
+        "timeout", "build_failure", "environment_error", "unknown",
+    ] = "unknown"
+    # Derived from the real tool calls this turn actually made (read_file/
+    # file_exists), never from the model's self-report of what it looked at.
+    files_inspected: list[str] = Field(default_factory=list)
+    attempt_number: int = 1
+    # "fixed"/"unresolved" describe whether THIS attempt's fix actually
+    # worked — only knowable once Tester runs again afterward, so the
+    # Debugger's own turn only ever sets "diagnosed" (a fix was proposed),
+    # "blocked" (no real investigative evidence could be gathered), or
+    # "no_fix_needed" (no files_to_change — the model concluded no code
+    # change is actually required). The outcome of the fix is reflected in
+    # the next TestResult, not retroactively rewritten into this record.
+    status: Literal["diagnosed", "fixed", "unresolved", "blocked", "no_fix_needed"] = "diagnosed"
 
 
 class ReviewResult(BaseModel):
