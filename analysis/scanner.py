@@ -71,6 +71,19 @@ class ScanLimits:
     max_depth: int = DEFAULT_MAX_DEPTH
 
 
+def is_test_path(relative_path: str) -> bool:
+    """True if any path segment looks like a test file/directory — the
+    same naming convention `scan_repository` uses to classify
+    `test_directories`, exposed here so other modules (e.g. the RAG hybrid
+    retriever's test-awareness boost) don't need their own copy of it."""
+    for segment in relative_path.replace("\\", "/").split("/"):
+        lower = segment.lower()
+        stem = lower.rsplit(".", 1)[0] if "." in lower else lower
+        if lower in _TEST_DIR_NAMES or stem.startswith("test_") or stem.endswith("_test"):
+            return True
+    return False
+
+
 def _is_source_file(filename: str) -> bool:
     return Path(filename).suffix.lower() in _SOURCE_EXTENSIONS
 

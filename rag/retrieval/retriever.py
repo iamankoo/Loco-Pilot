@@ -24,6 +24,11 @@ class RetrievedChunk(BaseModel):
     chunk_index: int
     score: float
     metadata: dict = Field(default_factory=dict)
+    # Populated by `rag.retrieval.hybrid.HybridRetriever` with a short,
+    # human-readable explanation of why this chunk was ranked where it
+    # was (e.g. "path matches: auth; explicitly named in the task").
+    # `None` for a plain `Retriever.retrieve()` call (pure semantic score).
+    retrieval_reason: str | None = None
 
 
 class Retriever:

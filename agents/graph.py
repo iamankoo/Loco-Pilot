@@ -50,7 +50,8 @@ from backend.app.services.tool_execution import BoundToolRunner
 from rag.embeddings.base import EmbeddingProvider
 from rag.ingestion.indexer import RepositoryIndexer
 from rag.retrieval.context_builder import build_context
-from rag.retrieval.retriever import Retriever
+from rag.retrieval.hybrid import HybridRetriever
+from rag.retrieval.query_builder import build_retrieval_query
 from tools.base import Permission, ToolContext
 from tools.registry import ToolRegistry
 from tools.workspace import Workspace
@@ -121,27 +122,21 @@ def _build_tool_runner(
     )
 
 
-def _retrieval_query_for(agent_name: str, state: ExecutionState) -> str | None:
-    """Query construction changes per agent stage: Developer retrieves
-    against the task + plan steps it's about to implement; Debugger
-    retrieves against the task + the actual failure it needs to diagnose.
-    Planner already receives the Orchestrator's initial task-based
-    retrieval, so it isn't repeated here."""
-    if agent_name == "developer" and state.plan is not None:
-        return f"{state.user_task}\n" + "\n".join(state.plan.steps)
-    if agent_name == "debugger" and state.test_results is not None:
-        return f"{state.user_task}\n{state.test_results.summary}\n" + "\n".join(state.test_results.errors)
-    return None
-
-
 async def _retrieve_stage_context(agent_name: str, state: ExecutionState, deps: GraphDependencies):
-    query = _retrieval_query_for(agent_name, state)
+    """Per-stage query construction is delegated to
+    `rag.retrieval.query_builder` (Planner's own turn is covered by the
+    Orchestrator's initial retrieval, so it isn't repeated here)."""
+    query = build_retrieval_query(agent_name, state)
     if query is None or deps.db is None:
         return None
     try:
-        retriever = Retriever(deps.embedding_provider)
+        retriever = HybridRetriever(deps.embedding_provider)
         chunks = await retriever.retrieve(
-            query, project_id=uuid.UUID(state.project_id), db=deps.db, top_k=deps.retrieval_top_k
+            query.text,
+            project_id=uuid.UUID(state.project_id),
+            db=deps.db,
+            top_k=deps.retrieval_top_k,
+            explicit_file_hints=query.explicit_file_hints,
         )
         return build_context(chunks, max_chars=deps.max_context_chars)
     except Exception as exc:  # noqa: BLE001 - retrieval failure must not abort the agent turn
@@ -156,10 +151,11 @@ async def _reindex_changed_files(state: ExecutionState, update: dict, deps: Grap
     # "deleted" is included so a removed file's stale chunks are cleared
     # from the RAG index (`RepositoryIndexer.index_file` clears chunks for
     # a path that no longer exists on disk) rather than lingering forever.
-    # "renamed" reindexes the new path; the old path's stale chunks are a
-    # known limitation (see README) since `FileChange` doesn't carry the
-    # rename's source path structurally.
-    changed_paths = [f.path for f in files_changed if f.change_type in ("created", "modified", "deleted", "renamed")]
+    # "renamed" reindexes the new path AND clears the old path's stale
+    # chunks via `source_path` (fixes the Phase 2.3 known limitation where
+    # only the destination was ever reindexed).
+    changed_paths = {f.path for f in files_changed if f.change_type in ("created", "modified", "deleted", "renamed")}
+    changed_paths |= {f.source_path for f in files_changed if f.change_type == "renamed" and f.source_path}
     if not changed_paths:
         return
     try:
@@ -265,22 +261,11 @@ def make_orchestrator_node(deps: GraphDependencies) -> Callable[[ExecutionState]
                 "messages": ["Execution cancelled before orchestrator started."],
             }
 
-        repository_context = None
-        retrieved_chunk_paths: list[tuple[str, float]] = []
-        if deps.db is not None:
-            try:
-                retriever = Retriever(deps.embedding_provider)
-                chunks = await retriever.retrieve(
-                    state.user_task,
-                    project_id=uuid.UUID(state.project_id),
-                    db=deps.db,
-                    top_k=deps.retrieval_top_k,
-                )
-                repository_context = build_context(chunks, max_chars=deps.max_context_chars)
-                retrieved_chunk_paths = [(c.file_path, c.score) for c in chunks]
-            except Exception as exc:  # noqa: BLE001 - retrieval failure must not abort the whole execution
-                logger.warning("retrieval_failed", error=str(exc))
-
+        # Repository analysis runs BEFORE retrieval (matching the target
+        # Discovery -> Analysis -> RAG -> Planner flow): its deterministic
+        # `relevant_files` becomes retrieval's explicit-file-hint input, so
+        # RAG cooperates with filesystem evidence instead of running
+        # independently of it.
         project_context = None
         try:
             workspace = Workspace.at(state.workspace_root)
@@ -291,14 +276,25 @@ def make_orchestrator_node(deps: GraphDependencies) -> Callable[[ExecutionState]
                     max_files=deps.workspace_scan_max_files or defaults.max_files,
                     max_depth=deps.workspace_scan_max_depth or defaults.max_depth,
                 )
-            project_context = await build_project_context(
-                workspace,
-                state.user_task,
-                scan_limits=scan_limits,
-                retrieved_chunk_paths=retrieved_chunk_paths,
-            )
+            project_context = await build_project_context(workspace, state.user_task, scan_limits=scan_limits)
         except Exception as exc:  # noqa: BLE001 - workspace intelligence failure must not abort the whole execution
             logger.warning("workspace_discovery_failed", error=str(exc))
+
+        repository_context = None
+        if deps.db is not None:
+            try:
+                query = build_retrieval_query("orchestrator", state.model_copy(update={"project_context": project_context}))
+                retriever = HybridRetriever(deps.embedding_provider)
+                chunks = await retriever.retrieve(
+                    query.text if query else state.user_task,
+                    project_id=uuid.UUID(state.project_id),
+                    db=deps.db,
+                    top_k=deps.retrieval_top_k,
+                    explicit_file_hints=query.explicit_file_hints if query else None,
+                )
+                repository_context = build_context(chunks, max_chars=deps.max_context_chars)
+            except Exception as exc:  # noqa: BLE001 - retrieval failure must not abort the whole execution
+                logger.warning("retrieval_failed", error=str(exc))
 
         trace = "Orchestrator: execution initialized"
         trace += (

@@ -21,6 +21,7 @@ from backend.app.db.repositories.repository_chunks import replace_chunks_for_fil
 from rag.chunking import chunk_text
 from rag.embeddings.base import EmbeddingProvider
 from rag.exclusions import MAX_INDEXABLE_FILE_BYTES, is_excluded_dir, is_supported_file
+from rag.symbols import extract_symbols
 from tools.workspace import Workspace
 
 logger = get_logger(component="repository_indexer")
@@ -91,6 +92,7 @@ class RepositoryIndexer:
             return None
 
         embeddings = await self._embedding_provider.embed([c.content for c in chunks])
+        extension = file_path.suffix
         chunk_rows = [
             {
                 "chunk_index": i,
@@ -99,7 +101,11 @@ class RepositoryIndexer:
                 "metadata": {
                     "start_line": chunk.start_line,
                     "end_line": chunk.end_line,
-                    "language": file_path.suffix.lstrip("."),
+                    "language": extension.lstrip("."),
+                    # Bounded, best-effort function/class names for this
+                    # chunk (see `rag/symbols.py`) — a retrieval signal,
+                    # not a claim of correct parsing.
+                    "symbols": extract_symbols(chunk.content, extension),
                 },
             }
             for i, chunk in enumerate(chunks)

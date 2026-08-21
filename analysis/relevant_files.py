@@ -20,7 +20,7 @@ _STOPWORDS = {
 }
 
 
-def _extract_keywords(task: str) -> set[str]:
+def extract_keywords(task: str) -> set[str]:
     words = re.findall(r"[A-Za-z0-9]+", task.lower())
     keywords = {w for w in words if len(w) >= 3 and w not in _STOPWORDS}
     # A short prefix of each longer keyword catches common abbreviations
@@ -33,7 +33,7 @@ def _extract_keywords(task: str) -> set[str]:
     return expanded
 
 
-def _score_path(path: str, keywords: set[str]) -> tuple[float, list[str]]:
+def score_path(path: str, keywords: set[str]) -> tuple[float, list[str]]:
     lower = path.lower()
     filename = lower.rsplit("/", 1)[-1]
     score = 0.0
@@ -65,11 +65,11 @@ def find_relevant_files(
     already-retrieved RAG evidence (see `agents.graph`'s stage retrieval),
     passed in rather than re-queried here so this stays a pure function
     over data the caller already has."""
-    keywords = _extract_keywords(task)
+    keywords = extract_keywords(task)
     scored: dict[str, RelevantFile] = {}
 
     for path in structure.files:
-        score, matched = _score_path(path, keywords)
+        score, matched = score_path(path, keywords)
         if score > 0:
             scored[path] = RelevantFile(path=path, reason=f"path matches: {', '.join(sorted(set(matched)))}", score=score)
 

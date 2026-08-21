@@ -2,11 +2,15 @@ from __future__ import annotations
 
 import uuid
 
+from agents.graph import GraphDependencies, _reindex_changed_files
+from agents.schemas import FileChange
+from agents.state import ExecutionState
 from backend.app.db.repositories.projects import create_project
 from backend.app.db.repositories.repository_chunks import count_chunks_for_project
 from rag.embeddings.hashing_provider import HashingEmbeddingProvider
 from rag.ingestion.indexer import RepositoryIndexer
 from rag.retrieval.retriever import Retriever
+from tools.registry import build_default_registry
 from tools.workspace import Workspace
 
 
@@ -60,3 +64,44 @@ async def test_index_file_clears_chunks_for_a_file_that_becomes_unreadable(
 
     assert chunk_count == 0
     assert await count_chunks_for_project(db_session, project.id) == 0
+
+
+async def test_graph_reindex_on_rename_clears_old_path_and_indexes_new_path(
+    db_session, tmp_workspace: Workspace
+) -> None:
+    """The Phase 2.3 known limitation ("renaming a file clears the
+    destination path's RAG index entry but not the old path") fixed in
+    Phase 2.4 via `FileChange.source_path` — exercised through the actual
+    graph helper, not just the underlying indexer primitive."""
+    (tmp_workspace.root / "old_name.py").write_text("marker_zeta = 1\n", encoding="utf-8")
+    project = await create_project(db_session, name=f"proj-{uuid.uuid4()}")
+    indexer = RepositoryIndexer(HashingEmbeddingProvider())
+    await indexer.index_file(tmp_workspace, project.id, "old_name.py", db_session)
+    assert await count_chunks_for_project(db_session, project.id) == 1
+
+    (tmp_workspace.root / "old_name.py").rename(tmp_workspace.root / "new_name.py")
+
+    state = ExecutionState(
+        execution_id=str(uuid.uuid4()),
+        project_id=str(project.id),
+        user_task="rename the module",
+        workspace_root=str(tmp_workspace.root),
+    )
+    deps = GraphDependencies(
+        registry=build_default_registry(), llm_client=None, embedding_provider=HashingEmbeddingProvider(), db=db_session
+    )
+    update = {
+        "files_changed": [
+            FileChange(
+                path="new_name.py", change_type="renamed", detail="renamed old_name.py -> new_name.py", source_path="old_name.py"
+            )
+        ]
+    }
+
+    await _reindex_changed_files(state, update, deps)
+
+    assert await count_chunks_for_project(db_session, project.id) == 1
+    retriever = Retriever(HashingEmbeddingProvider())
+    results = await retriever.retrieve("marker_zeta", project_id=project.id, db=db_session, top_k=5)
+    assert any(r.file_path == "new_name.py" for r in results)
+    assert not any(r.file_path == "old_name.py" for r in results)

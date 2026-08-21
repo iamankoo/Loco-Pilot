@@ -77,3 +77,36 @@ async def count_chunks_for_project(db: AsyncSession, project_id: uuid.UUID) -> i
     stmt = select(func.count()).select_from(RepositoryChunk).where(RepositoryChunk.project_id == project_id)
     result = await db.execute(stmt)
     return result.scalar_one()
+
+
+async def get_chunks_for_file(
+    db: AsyncSession, *, project_id: uuid.UUID, file_path: str, limit: int = 5
+) -> list[RepositoryChunk]:
+    """Every indexed chunk for one exact file path, in file order — used to
+    pull a specific file's content into a retrieval candidate pool without
+    a full semantic search (e.g. a file the user named explicitly)."""
+    stmt = (
+        select(RepositoryChunk)
+        .where(RepositoryChunk.project_id == project_id, RepositoryChunk.file_path == file_path)
+        .order_by(RepositoryChunk.chunk_index)
+        .limit(limit)
+    )
+    result = await db.execute(stmt)
+    return list(result.scalars().all())
+
+
+async def find_chunks_by_file_path_suffix(
+    db: AsyncSession, *, project_id: uuid.UUID, suffix: str, limit: int = 5
+) -> list[RepositoryChunk]:
+    """Bounded, project-scoped lookup for a bare filename (e.g. "config.py")
+    mentioned explicitly in a task, when the caller doesn't know the file's
+    full repository-relative path. Always filtered by `project_id` first —
+    never a cross-project match."""
+    stmt = (
+        select(RepositoryChunk)
+        .where(RepositoryChunk.project_id == project_id, RepositoryChunk.file_path.ilike(f"%{suffix}"))
+        .order_by(RepositoryChunk.file_path, RepositoryChunk.chunk_index)
+        .limit(limit)
+    )
+    result = await db.execute(stmt)
+    return list(result.scalars().all())

@@ -41,6 +41,10 @@ class FileChange(BaseModel):
     path: str
     change_type: Literal["created", "modified", "deleted", "renamed", "failed"]
     detail: str
+    # Only set for change_type="renamed" — the path the file moved FROM, so
+    # the RAG index can clear its stale chunks (not just index the new
+    # path). None for every other change type.
+    source_path: str | None = None
 
 
 class DeveloperResult(BaseModel):

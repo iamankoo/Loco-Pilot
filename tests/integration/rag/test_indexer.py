@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import uuid
 
+import pytest
+
 from backend.app.db.repositories.projects import create_project
 from backend.app.db.repositories.repository_chunks import count_chunks_for_project
 from rag.embeddings.hashing_provider import HashingEmbeddingProvider
+from rag.exclusions import MAX_INDEXABLE_FILE_BYTES
 from rag.ingestion.indexer import RepositoryIndexer
 from tools.workspace import Workspace
 
@@ -80,3 +83,75 @@ async def test_reindexing_a_file_replaces_its_chunks_not_duplicates(db_session, 
     second_count = await count_chunks_for_project(db_session, project.id)
 
     assert first_count == second_count == 1
+
+
+async def test_index_repository_skips_empty_files(db_session, tmp_workspace: Workspace) -> None:
+    (tmp_workspace.root / "empty.py").write_text("", encoding="utf-8")
+    (tmp_workspace.root / "code.py").write_text("x = 1\n", encoding="utf-8")
+
+    project = await create_project(db_session, name=f"proj-{uuid.uuid4()}")
+    indexer = RepositoryIndexer(HashingEmbeddingProvider())
+    result = await indexer.index_repository(tmp_workspace, project.id, db_session)
+
+    assert result.files_indexed == 1
+    assert result.files_skipped == 1
+
+
+async def test_index_repository_skips_oversized_files(db_session, tmp_workspace: Workspace) -> None:
+    (tmp_workspace.root / "huge.py").write_text("x" * (MAX_INDEXABLE_FILE_BYTES + 1), encoding="utf-8")
+    (tmp_workspace.root / "code.py").write_text("x = 1\n", encoding="utf-8")
+
+    project = await create_project(db_session, name=f"proj-{uuid.uuid4()}")
+    indexer = RepositoryIndexer(HashingEmbeddingProvider())
+    result = await indexer.index_repository(tmp_workspace, project.id, db_session)
+
+    assert result.files_indexed == 1
+    assert result.files_skipped == 1
+
+
+async def test_index_repository_symlinked_directory_is_never_indexed(db_session, tmp_path) -> None:
+    outside = tmp_path.parent / f"outside-index-{tmp_path.name}"
+    outside.mkdir(exist_ok=True)
+    (outside / "secret.py").write_text("SECRET_KEY = 'do-not-index-me'\n", encoding="utf-8")
+
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    (workspace_root / "code.py").write_text("x = 1\n", encoding="utf-8")
+    try:
+        (workspace_root / "escape").symlink_to(outside, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("Symlink creation is not permitted in this environment.")
+
+    project = await create_project(db_session, name=f"proj-{uuid.uuid4()}")
+    indexer = RepositoryIndexer(HashingEmbeddingProvider())
+    result = await indexer.index_repository(Workspace.at(workspace_root), project.id, db_session)
+
+    # os.walk never follows a symlinked directory (followlinks=False,
+    # the default) — the file outside the workspace is never discovered,
+    # let alone indexed.
+    assert result.files_indexed == 1
+
+
+async def test_renaming_an_indexed_file_moves_its_chunks_not_duplicates(db_session, tmp_workspace: Workspace) -> None:
+    """Phase 2.3 left a known limitation: renaming only reindexed the
+    destination path, leaving the old path's stale chunks behind. Phase
+    2.4 fixes this in `agents.graph._reindex_changed_files` (via
+    `FileChange.source_path`) — this test verifies the underlying indexer
+    primitive that fix relies on: clearing the old path's chunks once the
+    file no longer exists there."""
+    (tmp_workspace.root / "old_name.py").write_text("marker_epsilon = 1\n", encoding="utf-8")
+    project = await create_project(db_session, name=f"proj-{uuid.uuid4()}")
+    indexer = RepositoryIndexer(HashingEmbeddingProvider())
+    await indexer.index_file(tmp_workspace, project.id, "old_name.py", db_session)
+    assert await count_chunks_for_project(db_session, project.id) == 1
+
+    (tmp_workspace.root / "old_name.py").rename(tmp_workspace.root / "new_name.py")
+
+    # Reindexing both paths (as the graph now does for a "renamed" change)
+    # clears the stale old-path entry and creates the new-path entry.
+    old_path_chunk_count = await indexer.index_file(tmp_workspace, project.id, "old_name.py", db_session)
+    new_path_chunk_count = await indexer.index_file(tmp_workspace, project.id, "new_name.py", db_session)
+
+    assert old_path_chunk_count == 0
+    assert new_path_chunk_count == 1
+    assert await count_chunks_for_project(db_session, project.id) == 1

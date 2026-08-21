@@ -116,9 +116,9 @@ Next.js dashboard  ──HTTP──>  FastAPI (backend/app)
   all capabilities dropped, resource-limited, network disabled unless a
   policy explicitly allows it, destroyed in a `finally` block regardless of
   outcome.
-- **RAG** (`rag/`): chunking, a pluggable embeddings provider (a free local
-  hashing embedder by default; any OpenAI-compatible embeddings endpoint
-  optionally), pgvector storage, and stage-specific retrieval.
+- **RAG** (`rag/`): repository -> chunking -> embedding -> pgvector ->
+  hybrid retrieval -> bounded context assembly, feeding Planner/Developer/
+  Debugger. See [RAG architecture](#rag-architecture) below.
 - **Persistence** (`backend/app/db/`): SQLAlchemy async models + Alembic
   migrations for projects, executions, agent steps, tool calls, and
   artifacts. Secrets are scrubbed (`backend/app/security/secret_scrubber.py`)
@@ -131,6 +131,95 @@ Next.js dashboard  ──HTTP──>  FastAPI (backend/app)
 - **Frontend** (`frontend/`): Next.js (App Router) + TypeScript + Tailwind,
   polling the read API for live updates (no WebSocket/SSE — deliberately the
   simplest reliable mechanism for this scale).
+
+## RAG architecture
+
+```
+Repository -> Discovery -> Chunking -> Embedding -> pgvector
+           -> Hybrid retrieval -> Context assembly -> Planner / Developer / Debugger
+```
+
+**Why RAG at all, and why not send the whole repository to the model:**
+software repositories are too large and change too often to reliably fit
+entirely into a model's context window, and even when a repository is
+small enough, most of it is irrelevant to any one task. RAG (retrieval
+over embedded chunks) narrows the repository down to a bounded, relevant
+slice before the model ever sees it.
+
+**Why RAG *and* deterministic repository analysis (`analysis/`), not RAG
+alone:** semantic retrieval can miss evidence pure similarity search isn't
+built to catch — an explicitly-named file ("check config.py"), a project's
+actual detected language/framework, or a test directory identified by
+naming convention. Deterministic signals give retrieval something
+dependable to lean on regardless of embedding quality, and RAG in turn
+covers cases deterministic rules can't (loosely related code with no
+name/path overlap). Neither replaces the other.
+
+**Chunking** (`rag/chunking.py`): line-based with overlap (60 lines,
+10-line overlap by default) — deliberately not a per-language AST/parser.
+A real parser for Python/JS/TS/Java/C/C++/Go/Rust/Dart would be a much
+larger dependency and maintenance surface for a benefit line-based
+chunking with generous overlap mostly already captures (a function rarely
+spans more than a couple of chunks, and the overlap keeps its signature
+and body together in at least one chunk). What Phase 2.4 adds instead is
+lightweight, regex-based **symbol extraction** (`rag/symbols.py`) per
+chunk — bounded, best-effort function/class names, not a claim of correct
+parsing — used only as a retrieval signal, not to change chunk boundaries.
+
+**Embeddings** (`rag/embeddings/`): provider-agnostic. The default
+`HashingEmbeddingProvider` is a free, local, deterministic hash
+projection — intentionally not a real semantic model, so RAG works with
+no API key and no live-API dependency in tests. An `OpenAICompatibleEmbeddingProvider`
+is available for a real semantic embedding endpoint via configuration
+only (`EMBEDDING_PROVIDER=openai_compatible`); retrieval/ranking logic
+does not change based on which provider is active.
+
+**Hybrid retrieval** (`rag/retrieval/hybrid.py`): because the default
+embedding provider's cosine similarity is a weak signal on its own, a wide
+semantic candidate pool (pgvector, project-scoped) is re-ranked using
+deterministic signals — filename/path keyword matches, content keyword
+hits, symbol matches (a stronger, separately-weighted bonus when the task
+names a compound identifier verbatim, e.g. "fix `authenticate_user`"), a
+boost for an already-relevant test file, and a strong boost for a file the
+task names explicitly (looked up directly if it isn't even in the
+semantic candidate pool). This keeps a single retrieval system — hybrid
+scoring re-ranks and augments the same pgvector-backed candidate pool
+rather than adding a second index or search engine.
+
+**Query construction** (`rag/retrieval/query_builder.py`): each agent
+stage retrieves against a different, deliberately small slice of
+execution state — Planner/Orchestrator against the task (plus any file
+named explicitly or flagged by `analysis.relevant_files`), Developer
+against the task, plan, and files it's about to touch, Debugger against
+the actual test failure/traceback and the files Developer just changed —
+never the entire accumulated state.
+
+**Context assembly** (`rag/retrieval/context_builder.py`): deduplicated,
+capped at a configurable character budget and a per-file chunk cap (so one
+file can't dominate the budget), grouped under one `[FILE N] path` label
+per file with a `lines A-B` sub-header per chunk rather than repeating the
+full header for every chunk. Retrieved content is always labeled
+`UNTRUSTED REPOSITORY CONTEXT` in every agent prompt — it is data an agent
+reads, never an instruction it follows.
+
+**Project isolation**: every retrieval query — semantic search and the
+explicit-filename lookup alike — filters by `project_id` first; there is
+no code path that queries `repository_chunks` without it.
+
+**Incremental indexing** (`rag/ingestion/indexer.py`, wired from
+`agents/graph.py`): a changed file is reindexed; a deleted file has its
+chunks cleared (re-indexing a path that no longer exists on disk clears
+its stale chunks); a renamed file has *both* its old path's chunks
+cleared and its new path indexed (via `FileChange.source_path` — this
+was a known Phase 2.3 limitation, fixed in Phase 2.4); an unchanged file
+is never re-embedded.
+
+**Current limitations**: the hashing embedding provider has no real
+semantic understanding — hybrid scoring's deterministic signals are what
+make retrieval useful today, not the embedding itself. Symbol extraction
+is regex-based, not a real parser, and can miss unusual syntax. A future
+local or hosted semantic embedding provider would slot in via
+`EMBEDDING_PROVIDER` with no change to retrieval/ranking code.
 
 ## LLM provider
 
