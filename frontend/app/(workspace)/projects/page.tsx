@@ -3,6 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useProjectsList } from "@/hooks/useProjects";
+import { Breadcrumb } from "@/components/Breadcrumb";
 import { PageHeader } from "@/components/PageHeader";
 import { Panel } from "@/components/Panel";
 import { StatusBadge } from "@/components/StatusBadge";
@@ -20,6 +21,7 @@ export default function ProjectsPage() {
 
   return (
     <div className="mx-auto max-w-6xl px-6 py-14 sm:px-8">
+      <Breadcrumb items={[{ label: "Home", href: "/" }, { label: "Projects" }]} />
       <PageHeader
         eyebrow="Workspace"
         title="Projects"

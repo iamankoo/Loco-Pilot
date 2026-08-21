@@ -1,6 +1,7 @@
 "use client";
 
 import { useSystemStatus } from "@/hooks/useSystemStatus";
+import { Breadcrumb } from "@/components/Breadcrumb";
 import { PageHeader } from "@/components/PageHeader";
 import { Panel } from "@/components/Panel";
 import { Skeleton } from "@/components/Skeleton";
@@ -12,6 +13,7 @@ export default function SettingsPage() {
 
   return (
     <div className="mx-auto max-w-6xl px-6 py-14 sm:px-8">
+      <Breadcrumb items={[{ label: "Home", href: "/" }, { label: "Settings" }]} />
       <PageHeader eyebrow="System" title="Settings" description="Live status of the LocoPilot backend and its dependencies." />
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">

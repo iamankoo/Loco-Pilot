@@ -1,8 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import Link from "next/link";
 import type { ExecutionDetail } from "@/lib/types";
+import { Breadcrumb } from "@/components/Breadcrumb";
 import { StatusBadge } from "@/components/StatusBadge";
 import { useCancelExecution } from "@/hooks/useExecutionMutations";
 import { formatDuration, formatTimestamp, isActiveExecution } from "@/lib/format";
@@ -14,17 +14,16 @@ export function ExecutionHeader({ execution }: { execution: ExecutionDetail }) {
 
   return (
     <div className="mb-10">
-      <div className="mb-4 flex items-center gap-2 text-sm text-ivory-faint">
-        <Link href="/executions" className="hover:text-ivory-dim">
-          Executions
-        </Link>
-        <span>/</span>
-        {execution.project_id ? (
-          <Link href={`/projects/${execution.project_id}`} className="hover:text-ivory-dim">
-            {execution.project_name ?? "Project"}
-          </Link>
-        ) : null}
-      </div>
+      <Breadcrumb
+        items={[
+          { label: "Home", href: "/" },
+          { label: "Executions", href: "/executions" },
+          {
+            label: execution.project_name ?? "Project",
+            href: execution.project_id ? `/projects/${execution.project_id}` : undefined,
+          },
+        ]}
+      />
 
       <div className="flex flex-col gap-6 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0">

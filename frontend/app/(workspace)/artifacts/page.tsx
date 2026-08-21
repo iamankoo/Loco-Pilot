@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useRecentArtifacts } from "@/hooks/useArtifacts";
+import { Breadcrumb } from "@/components/Breadcrumb";
 import { PageHeader } from "@/components/PageHeader";
 import { Panel } from "@/components/Panel";
 import { EmptyState } from "@/components/EmptyState";
@@ -14,6 +15,7 @@ export default function ArtifactsPage() {
 
   return (
     <div className="mx-auto max-w-6xl px-6 py-14 sm:px-8">
+      <Breadcrumb items={[{ label: "Home", href: "/" }, { label: "Artifacts" }]} />
       <PageHeader
         eyebrow="Outputs"
         title="Artifacts"

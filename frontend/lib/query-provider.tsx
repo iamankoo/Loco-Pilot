@@ -10,12 +10,14 @@ export function QueryProvider({ children }: { children: React.ReactNode }) {
         defaultOptions: {
           queries: {
             staleTime: 5_000,
-            retry: 1,
+            // A retry can sit "paused" waiting for the window to regain
+            // focus or come back online before it ever fires — which
+            // means a real failure shows neither an error nor data until
+            // that happens. For a dashboard that must surface backend
+            // failures immediately, one clean attempt is better than a
+            // retry that can silently stall.
+            retry: false,
             refetchOnWindowFocus: false,
-            // The backend is same-machine/LAN, and browser online-detection
-            // is unreliable in some environments; without this, a failed
-            // request can leave a query paused indefinitely (no error, no
-            // data) instead of surfacing the failure.
             networkMode: "always",
           },
           mutations: {

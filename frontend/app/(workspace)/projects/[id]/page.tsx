@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useProjectDetail } from "@/hooks/useProjects";
+import { Breadcrumb } from "@/components/Breadcrumb";
 import { Panel } from "@/components/Panel";
 import { StatusBadge } from "@/components/StatusBadge";
 import { EmptyState } from "@/components/EmptyState";
@@ -39,6 +40,9 @@ export default function ProjectDetailPage() {
 
   return (
     <div className="mx-auto max-w-6xl px-6 py-14 sm:px-8">
+      <Breadcrumb
+        items={[{ label: "Home", href: "/" }, { label: "Projects", href: "/projects" }, { label: data.name }]}
+      />
       <p className="mb-3 text-xs uppercase tracking-widest2 text-gold/80">Project</p>
       <h1 className="font-display text-4xl tracking-tightest text-ivory sm:text-5xl">{data.name}</h1>
       <p className="mt-3 text-base text-ivory-faint">

@@ -3,6 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useExecutionsList } from "@/hooks/useExecutions";
+import { Breadcrumb } from "@/components/Breadcrumb";
 import { PageHeader } from "@/components/PageHeader";
 import { Panel } from "@/components/Panel";
 import { StatusBadge } from "@/components/StatusBadge";
@@ -34,6 +35,7 @@ export default function ExecutionsPage() {
 
   return (
     <div className="mx-auto max-w-6xl px-6 py-14 sm:px-8">
+      <Breadcrumb items={[{ label: "Home", href: "/" }, { label: "Executions" }]} />
       <PageHeader eyebrow="History" title="Executions" description="Every run LocoPilot has attempted, in order." />
 
       <div className="mb-6 flex flex-wrap gap-2">
