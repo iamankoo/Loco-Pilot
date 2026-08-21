@@ -1,15 +1,17 @@
-"""GET /api/v1/projects and GET /api/v1/projects/{id}.
+"""Project endpoints: list/detail (read), creation, workspace file
+browsing, and file uploads.
 
-Read-only — projects are currently created implicitly by
-`POST /api/v1/executions` (see `executions.py`), not through a dedicated
-creation endpoint here.
+Project creation and file browsing/upload all resolve to a project's
+`workspace_path` and go through the same `Workspace` sandbox boundary
+every agent tool uses — never an unrestricted filesystem path.
 """
 
 from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.api.v1.dashboard_schemas import (
@@ -23,11 +25,42 @@ from backend.app.db.repositories.executions import (
     get_latest_execution_for_project,
     list_executions,
 )
-from backend.app.db.repositories.projects import count_projects, get_project, list_projects
+from backend.app.db.repositories.projects import count_projects, create_project, get_project, list_projects
 from backend.app.db.session import get_db
 from backend.app.services.execution_detail import elapsed_seconds
+from backend.app.services.workspace_files import WorkspaceFileError, list_workspace_entries, save_uploaded_files
+from backend.app.services.workspace_provisioning import provision_default_workspace
+from tools.workspace import Workspace, WorkspaceError
 
 router = APIRouter(prefix="/projects", tags=["projects"])
+
+
+class CreateProjectRequest(BaseModel):
+    name: str | None = None
+    workspace_path: str | None = None
+
+
+class WorkspaceEntryResponse(BaseModel):
+    name: str
+    path: str
+    is_dir: bool
+    size_bytes: int | None = None
+
+
+class WorkspaceListResponse(BaseModel):
+    path: str
+    entries: list[WorkspaceEntryResponse]
+
+
+class UploadedFileResponse(BaseModel):
+    filename: str
+    relative_path: str
+    size_bytes: int
+    content_type: str | None = None
+
+
+class UploadResponse(BaseModel):
+    files: list[UploadedFileResponse]
 
 
 async def _project_summary(db: AsyncSession, project) -> ProjectSummary:
@@ -84,3 +117,74 @@ async def get_project_endpoint(project_id: uuid.UUID, db: AsyncSession = Depends
     ]
 
     return ProjectDetailResponse(**summary.model_dump(), recent_executions=recent_summaries)
+
+
+@router.post("", status_code=201, response_model=ProjectSummary)
+async def create_project_endpoint(
+    payload: CreateProjectRequest, db: AsyncSession = Depends(get_db)
+) -> ProjectSummary:
+    """Resolves or provisions a workspace and registers a project for it.
+    Used by the frontend's workspace selector before uploading files or
+    running an execution — separate from `POST /executions`, which still
+    creates a project implicitly for the no-attachment case."""
+    workspace_path = payload.workspace_path
+    name = payload.name
+    if not workspace_path:
+        name, workspace_path = provision_default_workspace(
+            seed_text=payload.name or "project", project_name=payload.name
+        )
+    else:
+        try:
+            Workspace.at(workspace_path)
+        except WorkspaceError as exc:
+            raise HTTPException(422, f"Invalid workspace_path: {exc}") from exc
+
+    project = await create_project(db, name=name or workspace_path, workspace_path=workspace_path)
+    return await _project_summary(db, project)
+
+
+@router.get("/{project_id}/files", response_model=WorkspaceListResponse)
+async def list_project_files_endpoint(
+    project_id: uuid.UUID,
+    path: str = Query("", description="Workspace-relative directory path; empty for the workspace root."),
+    db: AsyncSession = Depends(get_db),
+) -> WorkspaceListResponse:
+    project = await get_project(db, project_id)
+    if project is None:
+        raise HTTPException(404, "Project not found.")
+
+    try:
+        entries = list_workspace_entries(project.workspace_path, path)
+    except WorkspaceFileError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+    return WorkspaceListResponse(
+        path=path,
+        entries=[
+            WorkspaceEntryResponse(name=e.name, path=e.path, is_dir=e.is_dir, size_bytes=e.size_bytes)
+            for e in entries
+        ],
+    )
+
+
+@router.post("/{project_id}/uploads", status_code=201, response_model=UploadResponse)
+async def upload_project_files_endpoint(
+    project_id: uuid.UUID, files: list[UploadFile] = File(...), db: AsyncSession = Depends(get_db)
+) -> UploadResponse:
+    project = await get_project(db, project_id)
+    if project is None:
+        raise HTTPException(404, "Project not found.")
+
+    try:
+        saved = await save_uploaded_files(project.workspace_path, files)
+    except WorkspaceFileError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+    return UploadResponse(
+        files=[
+            UploadedFileResponse(
+                filename=f.filename, relative_path=f.relative_path, size_bytes=f.size_bytes, content_type=f.content_type
+            )
+            for f in saved
+        ]
+    )

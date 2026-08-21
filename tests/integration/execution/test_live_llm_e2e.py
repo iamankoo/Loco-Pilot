@@ -1,16 +1,17 @@
-"""REAL Qwen end-to-end validation (Phase 1.5, section 21).
+"""REAL end-to-end validation of whichever LLM provider is configured
+(LLM_PROVIDER — gemini by default, qwen also supported), Phase 1.5
+section 21.
 
 Runs the complete, real production path — no fake LLM client anywhere —
 against the deterministic calculator fixture:
 
-    Qwen -> Planner -> Developer -> real tool calls -> Docker -> Tester -> Reviewer
+    LLM -> Planner -> Developer -> real tool calls -> Docker -> Tester -> Reviewer
 
-Skips (never fails, never fabricates a result) when LLM_API_KEY/
-LLM_BASE_URL aren't configured, in addition to the usual Docker-image
-skip guard this directory's conftest already applies. This is the one
-place in the suite where the LLM is never scripted — see
-`backend/tests/test_llm_smoke.py` for narrower, faster live checks of the
-same endpoint.
+Skips (never fails, never fabricates a result) when no API key is
+configured, in addition to the usual Docker-image skip guard this
+directory's conftest already applies. This is the one place in the suite
+where the LLM is never scripted — see `backend/tests/test_llm_smoke.py`
+for narrower, faster live checks of the same endpoint.
 """
 
 from __future__ import annotations
@@ -34,10 +35,12 @@ from tools.workspace import Workspace
 FIXTURE_ROOT = Path(__file__).resolve().parents[3] / "playground" / "sample-project"
 
 
-async def test_live_qwen_full_graph_against_calculator_fixture(db_session, tmp_path: Path) -> None:
+async def test_live_llm_full_graph_against_calculator_fixture(db_session, tmp_path: Path) -> None:
     settings = get_settings()
-    if not settings.llm_api_key or not settings.llm_base_url:
-        pytest.skip("LLM_API_KEY/LLM_BASE_URL not configured; live Qwen end-to-end validation not run.")
+    if not settings.llm_api_key:
+        pytest.skip("LLM_API_KEY not configured; live end-to-end validation not run.")
+    if settings.llm_provider != "gemini" and not settings.llm_base_url:
+        pytest.skip("LLM_BASE_URL not configured; live end-to-end validation not run.")
 
     workspace_dir = tmp_path / "calculator"
     shutil.copytree(FIXTURE_ROOT, workspace_dir)

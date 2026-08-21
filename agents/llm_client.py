@@ -75,6 +75,32 @@ class StructuredLLMClient(Protocol):
     ) -> tuple[T, list[ToolCallStep]]: ...
 
 
+class UnavailableLLMClient:
+    """A `StructuredLLMClient` that always fails with a specific, known
+    reason (e.g. the real provider misconfiguration message) instead of
+    a generic "no client configured" error. Used so a Qwen setup problem
+    discovered when building the client for a real execution — missing
+    key, wrong model, account not authorized, etc. — surfaces to the
+    user verbatim rather than being collapsed into one generic message."""
+
+    def __init__(self, reason: str) -> None:
+        self._reason = reason
+
+    async def generate(self, *, system: str, user: str, output_model: type[T]) -> T:
+        raise LLMUnavailableError(self._reason)
+
+    async def generate_with_tools(
+        self,
+        *,
+        system: str,
+        user: str,
+        output_model: type[T],
+        tool_runner: "ToolRunner",
+        max_tool_calls: int,
+    ) -> tuple[T, list[ToolCallStep]]:
+        raise LLMUnavailableError(self._reason)
+
+
 class LangChainStructuredLLMClient:
     def __init__(self, chat_model) -> None:
         self._chat_model = chat_model

@@ -2,12 +2,17 @@ import type {
   ArtifactSummary,
   AgentStepSummary,
   CreateExecutionRequest,
+  CreateProjectRequest,
   ExecutionDetail,
   ExecutionListResponse,
   ExecutionRecord,
+  LlmHealth,
   ProjectDetail,
   ProjectListResponse,
+  ProjectSummary,
   ToolCallListResponse,
+  UploadResponse,
+  WorkspaceListResponse,
 } from "./types";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
@@ -23,9 +28,12 @@ export class ApiError extends Error {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  // FormData bodies must let the browser set their own multipart boundary —
+  // never force a JSON Content-Type on top of it.
+  const isFormData = typeof FormData !== "undefined" && init?.body instanceof FormData;
   const response = await fetch(`${API_BASE_URL}${path}`, {
     ...init,
-    headers: { "Content-Type": "application/json", ...init?.headers },
+    headers: isFormData ? init?.headers : { "Content-Type": "application/json", ...init?.headers },
     cache: "no-store",
   });
 
@@ -75,6 +83,20 @@ export const api = {
     request<ProjectListResponse>(`/api/v1/projects${toQuery(params)}`),
 
   getProject: (projectId: string) => request<ProjectDetail>(`/api/v1/projects/${projectId}`),
+
+  createProject: (payload: CreateProjectRequest) =>
+    request<ProjectSummary>(`/api/v1/projects`, { method: "POST", body: JSON.stringify(payload) }),
+
+  listProjectFiles: (projectId: string, path = "") =>
+    request<WorkspaceListResponse>(`/api/v1/projects/${projectId}/files${toQuery({ path })}`),
+
+  uploadProjectFiles: (projectId: string, files: File[]) => {
+    const form = new FormData();
+    for (const file of files) form.append("files", file);
+    return request<UploadResponse>(`/api/v1/projects/${projectId}/uploads`, { method: "POST", body: form });
+  },
+
+  getLlmHealth: () => request<LlmHealth>(`/health/llm`),
 
   listExecutions: (params: { projectId?: string; status?: string; limit?: number; offset?: number } = {}) =>
     request<ExecutionListResponse>(

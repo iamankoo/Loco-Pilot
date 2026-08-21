@@ -1,11 +1,13 @@
-"""Live Qwen3-Coder validation — clearly separated from the deterministic
-suite (per Phase 1.5's requirement), skip-gated on real credentials.
+"""Live validation of whichever LLM provider is actually configured
+(LLM_PROVIDER — gemini by default, qwen also supported) — clearly
+separated from the deterministic suite (per Phase 1.5's requirement),
+skip-gated on real credentials.
 
-Every test here either genuinely calls the configured Qwen endpoint or
-skips with an explicit reason — never a scripted/fake stand-in, and never
-marked passed without a real call actually succeeding. When
-LLM_API_KEY/LLM_BASE_URL aren't configured, all of these skip and the
-rest of the suite (which never depends on them) still runs and passes.
+Every test here either genuinely calls the configured provider or skips
+with an explicit reason — never a scripted/fake stand-in, and never
+marked passed without a real call actually succeeding. When no API key is
+configured, all of these skip and the rest of the suite (which never
+depends on them) still runs and passes.
 """
 
 from __future__ import annotations
@@ -21,11 +23,15 @@ from backend.app.core.llm.factory import get_llm_provider
 
 def _require_live_credentials() -> None:
     settings = get_settings()
-    if not settings.llm_api_key or not settings.llm_base_url:
-        pytest.skip("LLM_API_KEY/LLM_BASE_URL not configured; skipping live LLM validation.")
+    if not settings.llm_api_key:
+        pytest.skip("LLM_API_KEY not configured; skipping live LLM validation.")
+    # LLM_BASE_URL only applies to OpenAI-compatible providers (e.g. qwen) —
+    # Gemini talks to Google's own endpoint and needs no base URL.
+    if settings.llm_provider != "gemini" and not settings.llm_base_url:
+        pytest.skip("LLM_BASE_URL not configured; skipping live LLM validation.")
 
 
-async def test_qwen_raw_connectivity() -> None:
+async def test_llm_raw_connectivity() -> None:
     """The configured endpoint responds to a basic chat request at all."""
     _require_live_credentials()
     chat_model = get_llm_provider().chat_model()
@@ -40,7 +46,7 @@ class _Verdict(BaseModel):
     confidence: str
 
 
-async def test_qwen_produces_valid_structured_output() -> None:
+async def test_llm_produces_valid_structured_output() -> None:
     """`with_structured_output` returns a real, schema-valid instance from
     the live model — not just raw unstructured text."""
     _require_live_credentials()
@@ -52,7 +58,7 @@ async def test_qwen_produces_valid_structured_output() -> None:
     assert result.answer
 
 
-async def test_qwen_tool_calling_behavior() -> None:
+async def test_llm_tool_calling_behavior() -> None:
     """The live model can be offered a tool and produces a well-formed
     tool_calls request when it decides to use it."""
     _require_live_credentials()
@@ -78,7 +84,7 @@ async def test_qwen_tool_calling_behavior() -> None:
     assert "city" in tool_calls[0]["args"]
 
 
-async def test_qwen_understands_provided_repository_context() -> None:
+async def test_llm_understands_provided_repository_context() -> None:
     """Given a small snippet of retrieved repository context, the model's
     structured answer is actually grounded in it (not merely well-formed)."""
     _require_live_credentials()
@@ -102,7 +108,7 @@ async def test_qwen_understands_provided_repository_context() -> None:
     assert "multiply" in result.function_name.lower()
 
 
-async def test_qwen_produces_a_valid_plan() -> None:
+async def test_llm_produces_a_valid_plan() -> None:
     """The real agent-facing client produces a schema-valid `Plan` for a
     concrete, simple task — the same call path `PlannerAgent` uses."""
     _require_live_credentials()

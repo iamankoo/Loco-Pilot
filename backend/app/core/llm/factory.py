@@ -11,10 +11,12 @@ from functools import lru_cache
 
 from backend.app.core.config import Settings, get_settings
 from backend.app.core.llm.base import LLMProvider
+from backend.app.core.llm.gemini_provider import GeminiProvider
 from backend.app.core.llm.qwen_provider import QwenProvider
 
 _PROVIDERS: dict[str, type[LLMProvider]] = {
     "qwen": QwenProvider,
+    "gemini": GeminiProvider,
 }
 
 

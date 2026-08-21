@@ -10,6 +10,7 @@ from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
 from backend.app.db.health import check_database
+from backend.app.services.llm_health import check_llm_status
 from backend.app.services.redis_service import check_redis
 
 router = APIRouter(tags=["health"])
@@ -34,3 +35,12 @@ async def readiness() -> JSONResponse:
         status_code=200 if healthy else 503,
         content={"status": "ok" if healthy else "error", "checks": checks},
     )
+
+
+@router.get("/health/llm")
+async def llm_health() -> dict[str, object]:
+    """LLM connectivity status: not_configured | auth_failed |
+    model_access_denied | error | ok. Never includes the API key. A real
+    (cached) probe call, not a presence-only check — a valid key with no
+    model access must not be reported as healthy."""
+    return await check_llm_status()

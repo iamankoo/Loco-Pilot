@@ -41,6 +41,7 @@ from backend.app.services.execution_service import (
     create_and_run_execution,
     run_execution,
 )
+from backend.app.services.workspace_provisioning import provision_default_workspace
 from tools.workspace import Workspace, WorkspaceError
 
 router = APIRouter(prefix="/executions", tags=["executions"])
@@ -76,15 +77,19 @@ async def create_execution_endpoint(
     project_id = payload.project_id
 
     if project_id is None:
-        if not payload.workspace_path:
-            raise HTTPException(422, "Either project_id or workspace_path must be provided.")
+        workspace_path = payload.workspace_path
+        project_name = payload.project_name
+        if not workspace_path:
+            # No project and no workspace given: fall back to the default
+            # LocoPilot Storage location instead of rejecting the request.
+            project_name, workspace_path = provision_default_workspace(
+                seed_text=payload.task, project_name=payload.project_name
+            )
         try:
-            Workspace.at(payload.workspace_path)
+            Workspace.at(workspace_path)
         except WorkspaceError as exc:
             raise HTTPException(422, f"Invalid workspace_path: {exc}") from exc
-        project = await create_project(
-            db, name=payload.project_name or payload.workspace_path, workspace_path=payload.workspace_path
-        )
+        project = await create_project(db, name=project_name or workspace_path, workspace_path=workspace_path)
         project_id = project.id
     else:
         project = await get_project(db, project_id)

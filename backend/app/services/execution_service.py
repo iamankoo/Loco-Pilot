@@ -14,7 +14,7 @@ import asyncio
 import uuid
 
 from agents.graph import GraphDependencies, build_graph
-from agents.llm_client import LangChainStructuredLLMClient, StructuredLLMClient
+from agents.llm_client import LangChainStructuredLLMClient, StructuredLLMClient, UnavailableLLMClient
 from agents.state import ExecutionState
 from backend.app.core.config import get_settings
 from backend.app.core.llm.factory import get_llm_provider
@@ -36,13 +36,19 @@ class ExecutionServiceError(Exception):
     pass
 
 
-def _build_llm_client() -> StructuredLLMClient | None:
+def _build_llm_client() -> StructuredLLMClient:
+    """Never fails: a broken/misconfigured provider must not prevent
+    creating the execution record. Instead of collapsing every failure
+    into a generic "no client configured" message, the real reason
+    (missing key, wrong model, provider/account not authorized, ...) is
+    captured and surfaced verbatim the first time an agent actually
+    tries to use the LLM."""
     try:
         provider = get_llm_provider()
         return LangChainStructuredLLMClient(provider.chat_model())
-    except Exception as exc:  # noqa: BLE001 - LLM misconfiguration must not prevent creating the execution record
+    except Exception as exc:  # noqa: BLE001
         logger.warning("llm_provider_unavailable", error=str(exc))
-        return None
+        return UnavailableLLMClient(str(exc))
 
 
 async def create_and_run_execution(db, *, project_id: uuid.UUID, task: str) -> Execution:

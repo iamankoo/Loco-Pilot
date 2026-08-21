@@ -42,7 +42,15 @@ export default function SettingsPage() {
           )}
         </Panel>
 
-        <Panel title="Access">
+        <Panel title="LLM">
+          {status.isLoading ? (
+            <Skeleton className="h-16 w-full" />
+          ) : (
+            <LlmStatusRow llm={status.data?.llm ?? null} />
+          )}
+        </Panel>
+
+        <Panel title="Access" className="lg:col-span-2">
           <p className="text-base leading-relaxed text-ivory-dim">
             This dashboard talks directly to the LocoPilot API — there is no login or account system in this
             phase. Access control is expected to be handled at the network layer (VPN, reverse proxy, or a
@@ -50,6 +58,52 @@ export default function SettingsPage() {
           </p>
         </Panel>
       </div>
+    </div>
+  );
+}
+
+const LLM_STATUS_LABEL: Record<string, string> = {
+  ok: "Connected",
+  not_configured: "Not configured",
+  auth_failed: "Authentication failed",
+  model_access_denied: "Model access denied",
+  error: "Error",
+};
+
+function LlmStatusRow({ llm }: { llm: { status: string; provider: string; model: string; detail: string | null } | null }) {
+  if (!llm) {
+    return <StatusRow label="Qwen Coder" ok={false} detail="Could not reach the backend to check LLM status." />;
+  }
+
+  const tone = llm.status === "ok" ? "success" : llm.status === "model_access_denied" ? "warning" : "error";
+
+  return (
+    <div className="flex items-start justify-between gap-4">
+      <div>
+        <p className="text-base text-ivory">Qwen Coder</p>
+        <p className="mt-0.5 font-mono text-sm text-ivory-faint">
+          {llm.provider} · {llm.model}
+        </p>
+        {llm.detail ? <p className="mt-1.5 max-w-sm text-sm text-status-error">{llm.detail}</p> : null}
+      </div>
+      <span
+        className={cn(
+          "flex flex-shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs uppercase tracking-widest2",
+          tone === "success" && "border-status-success/30 bg-status-success/10 text-status-success",
+          tone === "warning" && "border-gold/30 bg-gold/10 text-gold",
+          tone === "error" && "border-status-error/30 bg-status-error/10 text-status-error"
+        )}
+      >
+        <span
+          className={cn(
+            "h-1.5 w-1.5 rounded-full",
+            tone === "success" && "bg-status-success",
+            tone === "warning" && "bg-gold",
+            tone === "error" && "bg-status-error"
+          )}
+        />
+        {LLM_STATUS_LABEL[llm.status] ?? llm.status}
+      </span>
     </div>
   );
 }

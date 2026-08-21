@@ -108,3 +108,31 @@ export function ChevronRightIcon(props: SVGProps<SVGSVGElement>) {
     </Icon>
   );
 }
+
+export function PaperclipIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Icon {...props}>
+      <path d="M13.5 6.5L7.6 12.4a2.3 2.3 0 0 0 3.25 3.25l6.4-6.4a4 4 0 0 0-5.66-5.66l-6.4 6.4a5.7 5.7 0 0 0 8.06 8.06" />
+    </Icon>
+  );
+}
+
+export function MicIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Icon {...props}>
+      <rect x="7.5" y="2.5" width="5" height="9" rx="2.5" />
+      <path d="M5 10a5 5 0 0 0 10 0" />
+      <path d="M10 15v3" />
+      <path d="M7 18h6" />
+    </Icon>
+  );
+}
+
+export function FileIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Icon {...props}>
+      <path d="M6 2.5h5.5L15 6v11.5H6z" />
+      <path d="M11.5 2.5V6H15" />
+    </Icon>
+  );
+}

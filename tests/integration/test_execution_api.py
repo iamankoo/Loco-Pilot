@@ -2,15 +2,30 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from pathlib import Path
 
+import pytest
 from httpx import AsyncClient
 
+from backend.app.core.config import get_settings
 from tools.workspace import Workspace
 
 
-async def test_create_execution_requires_project_or_workspace(client: AsyncClient, db_session) -> None:
-    response = await client.post("/api/v1/executions", json={"task": "do something"})
-    assert response.status_code == 422
+async def test_create_execution_without_project_or_workspace_uses_default_storage(
+    client: AsyncClient, db_session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Workspace selection is optional: omitting both project_id and
+    workspace_path falls back to an auto-provisioned project under the
+    LocoPilot Storage root instead of being rejected."""
+    monkeypatch.setenv("LOCOPILOT_WORKSPACE_ROOT", str(tmp_path))
+    get_settings.cache_clear()
+    try:
+        response = await client.post("/api/v1/executions", json={"task": "do something"})
+        assert response.status_code == 201
+        body = response.json()
+        assert body["project_id"]
+    finally:
+        get_settings.cache_clear()
 
 
 async def test_create_execution_rejects_invalid_workspace_path(client: AsyncClient, db_session) -> None:

@@ -167,3 +167,40 @@ export const TERMINAL_STATUSES: ExecutionStatus[] = ["passed", "failed", "error"
 export function isTerminalStatus(status: string): boolean {
   return TERMINAL_STATUSES.includes(status as ExecutionStatus);
 }
+
+export interface CreateProjectRequest {
+  name?: string | null;
+  workspace_path?: string | null;
+}
+
+export interface WorkspaceEntry {
+  name: string;
+  path: string;
+  is_dir: boolean;
+  size_bytes: number | null;
+}
+
+export interface WorkspaceListResponse {
+  path: string;
+  entries: WorkspaceEntry[];
+}
+
+export interface UploadedFile {
+  filename: string;
+  relative_path: string;
+  size_bytes: number;
+  content_type: string | null;
+}
+
+export interface UploadResponse {
+  files: UploadedFile[];
+}
+
+export type LlmStatus = "ok" | "not_configured" | "auth_failed" | "model_access_denied" | "error";
+
+export interface LlmHealth {
+  status: LlmStatus;
+  provider: string;
+  model: string;
+  detail: string | null;
+}

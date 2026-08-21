@@ -1,40 +1,42 @@
-import Link from "next/link";
+"use client";
+
+import { useSyncExternalStore } from "react";
+import { CommandCenter } from "@/features/dashboard/CommandCenter";
+
+function timeOfDayGreeting(hour: number): string {
+  if (hour < 12) return "Good morning";
+  if (hour < 18) return "Good afternoon";
+  return "Good evening";
+}
+
+function subscribeNever() {
+  return () => {};
+}
 
 export default function HomePage() {
+  // The greeting reflects the visitor's own clock, which the server can't
+  // know — useSyncExternalStore renders a neutral value during SSR/initial
+  // hydration, then the real one immediately after, without a manual
+  // effect+setState round trip.
+  const greeting = useSyncExternalStore(
+    subscribeNever,
+    () => timeOfDayGreeting(new Date().getHours()),
+    () => "Hello"
+  );
+
   return (
-    <div className="relative mx-auto flex max-w-5xl flex-col items-center px-6 pb-32 pt-28 text-center sm:px-8 sm:pt-40">
-      <p className="mb-6 text-xs uppercase tracking-widest2 text-gold/80">Autonomous software engineering</p>
-
-      <h1 className="font-display text-balance text-5xl leading-[1.08] tracking-tightest text-ivory sm:text-6xl md:text-7xl">
-        An agent that plans,
-        <br />
-        writes, tests, and <span className="italic text-gold">reviews</span>
-        <br />
-        its own work.
+    <div className="relative mx-auto flex max-w-3xl flex-col items-center px-6 pb-32 pt-24 text-center sm:px-8 sm:pt-32">
+      <h1 className="font-display text-balance text-4xl leading-[1.15] tracking-tightest text-ivory sm:text-5xl">
+        {greeting}, <span className="italic text-gold">champ</span>.
       </h1>
+      <p className="mt-3 text-balance text-lg text-ivory-dim">What should we build today?</p>
+      <p className="mt-1 text-sm text-ivory-faint">Turn your idea into working code.</p>
 
-      <p className="mt-8 max-w-xl text-balance text-base leading-relaxed text-ivory-dim sm:text-lg">
-        LocoPilot takes a task description and a repository, then runs a full engineering
-        pipeline — orchestration, planning, implementation, testing, debugging, and review —
-        with every step recorded and inspectable.
-      </p>
-
-      <div className="mt-11 flex flex-col items-center gap-4 sm:flex-row">
-        <Link
-          href="/dashboard"
-          className="rounded-full bg-ivory px-7 py-3 text-sm font-medium tracking-wide text-ground transition-transform duration-200 hover:scale-[1.02]"
-        >
-          Open Dashboard
-        </Link>
-        <Link
-          href="/executions"
-          className="rounded-full border border-line-strong px-7 py-3 text-sm tracking-wide text-ivory-dim transition-colors duration-200 hover:border-gold/40 hover:text-ivory"
-        >
-          View Executions
-        </Link>
+      <div className="mt-10 w-full text-left">
+        <CommandCenter eyebrow="" heading="" placeholder="Tell LocoPilot what you want to build…" />
       </div>
 
-      <div className="mt-24 grid w-full grid-cols-1 gap-px overflow-hidden rounded-lg border border-line sm:grid-cols-3">
+      <div className="mt-20 grid w-full grid-cols-1 gap-px overflow-hidden rounded-lg border border-line sm:grid-cols-3">
         {PIPELINE_HIGHLIGHTS.map((item) => (
           <div key={item.title} className="bg-ground-raised/40 px-7 py-8 text-left">
             <p className="font-display text-xl text-ivory">{item.title}</p>

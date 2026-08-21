@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import os
 from functools import lru_cache
+from pathlib import Path
 from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -34,9 +36,13 @@ class Settings(BaseSettings):
     redis_password: str | None = None
 
     # ---- LLM provider ----
-    llm_provider: str = "qwen"
+    # gemini (default) | qwen — provider-agnostic: swapping is a config
+    # change (LLM_PROVIDER/LLM_MODEL/LLM_API_KEY/LLM_BASE_URL), not a code
+    # change in any agent. LLM_BASE_URL only applies to OpenAI-compatible
+    # providers (e.g. qwen) — Gemini uses Google's own endpoint.
+    llm_provider: str = "gemini"
     llm_base_url: str = ""
-    llm_model: str = "qwen3-coder-plus"
+    llm_model: str = "gemini-pro-latest"
     llm_api_key: str | None = None
     llm_temperature: float = 0.2
     llm_request_timeout: int = 60
@@ -75,6 +81,13 @@ class Settings(BaseSettings):
     # ---- CORS ----
     cors_origins: str = "http://localhost:3000,http://localhost:5173"
 
+    # ---- Workspace storage ----
+    # Root directory for the default "LocoPilot Storage" workspace, used
+    # whenever an execution is created without an explicit project or
+    # workspace_path. Never hardcode a personal path here — if unset, a
+    # platform-appropriate application-data directory is used instead.
+    locopilot_workspace_root: str | None = None
+
     @property
     def database_url(self) -> str:
         return (
@@ -90,6 +103,35 @@ class Settings(BaseSettings):
     @property
     def cors_origins_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
+
+    @property
+    def workspace_root(self) -> Path:
+        """The "LocoPilot Storage" root: `projects/`, `uploads/`,
+        `executions/`, and `artifacts/` live under here. Configurable via
+        LOCOPILOT_WORKSPACE_ROOT; otherwise a platform-appropriate
+        application-data directory, never a path inside the repo or a
+        hardcoded personal path."""
+        if self.locopilot_workspace_root:
+            root = Path(self.locopilot_workspace_root).expanduser()
+        else:
+            root = _default_app_data_dir() / "LocoPilot"
+        for sub in ("projects", "uploads", "executions", "artifacts"):
+            (root / sub).mkdir(parents=True, exist_ok=True)
+        return root
+
+
+def _default_app_data_dir() -> Path:
+    if os.name == "nt":
+        base = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA")
+        if base:
+            return Path(base)
+        return Path.home() / "AppData" / "Local"
+    xdg_data_home = os.environ.get("XDG_DATA_HOME")
+    if xdg_data_home:
+        return Path(xdg_data_home)
+    if os.uname().sysname == "Darwin":  # noqa: SIM108 - explicit branch reads clearer than a ternary here
+        return Path.home() / "Library" / "Application Support"
+    return Path.home() / ".local" / "share"
 
 
 @lru_cache
