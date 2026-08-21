@@ -7,15 +7,21 @@ system, runs tests in an isolated sandbox, debugs failures, reviews its own
 diff, and reports the result — with every step, tool call, and artifact
 persisted and inspectable through a web dashboard.
 
-## LocoPilot v1
+## LocoPilot V2
 
-This is the first complete, end-to-end milestone: a working agent pipeline,
-a real API, a real dashboard, and a real (if intentionally bounded) local
-coding-agent workflow. It is **not** production software — see
+V2 hardens the v1 pipeline into a full USER TASK → UNDERSTAND PROJECT →
+PLAN → ACT → TEST → DEBUG → RETEST → REVIEW → REPORT → DONE agent: it is
+now Git-aware (never misattributes a user's own pre-existing uncommitted
+changes to itself), gives every execution its own isolated, traceable
+workspace, produces an evidence-based engineering report and a queryable
+observability event stream for every run, and never commits or pushes
+anything on its own — the only Git identity or GitHub authentication
+involved anywhere is your own local `git` setup, never a service credential
+LocoPilot holds. It is **not** production software — see
 [Known limitations](#known-limitations) before relying on it for anything
 beyond local, single-user use.
 
-What v1 includes:
+What V2 includes:
 
 - A LangGraph pipeline (Orchestrator → Planner → Developer → Tester →
   Debugger ↺ → Reviewer) where Developer and Debugger are genuine
@@ -49,6 +55,9 @@ What v1 includes:
 - A provider-agnostic LLM layer: **Gemini is the default provider**; Qwen
   (or any OpenAI-compatible endpoint) remains fully supported and is a
   configuration change, not a code change.
+- Git awareness, per-execution workspace isolation, evidence-based
+  engineering reports, and a queryable observability event stream — see
+  the corresponding entries under [Architecture](#architecture) below.
 
 ## Architecture
 
