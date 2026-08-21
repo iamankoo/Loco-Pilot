@@ -173,6 +173,17 @@ Next.js dashboard  ──HTTP──>  FastAPI (backend/app)
   conventional-commit-style message from real persisted state (files
   changed, test/review outcome) for a human to use when they choose to
   commit — it never executes a commit itself.
+- **Engineering reports** (`backend/app/services/execution_report.py`,
+  `GET /api/v1/executions/{id}/report`): an evidence-based report for one
+  execution — task, plan, real file changes, real test results, the full
+  debug-retry history, the review verdict, and an honest final status/
+  reason/recommendation — reconstructed entirely from already-persisted
+  `AgentStep`/`Execution`/`Artifact` rows (the same data
+  `execution_detail.py` already reads for the dashboard), never from an
+  LLM's own account of what it did. Available for any execution regardless
+  of terminal status — a still-running or failed execution gets an honest
+  partial report of whatever actually happened so far, not a fabricated
+  "success".
 - **Persistence** (`backend/app/db/`): SQLAlchemy async models + Alembic
   migrations for projects, executions, agent steps, tool calls, and
   artifacts. Secrets are scrubbed (`backend/app/security/secret_scrubber.py`)

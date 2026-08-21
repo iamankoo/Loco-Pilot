@@ -35,6 +35,7 @@ from backend.app.db.repositories.projects import create_project, get_project
 from backend.app.db.repositories.tool_calls import count_tool_calls_for_execution, list_tool_calls_for_execution
 from backend.app.db.session import get_db
 from backend.app.services.execution_detail import elapsed_seconds, synthesize_execution_detail
+from backend.app.services.execution_report import build_execution_report
 from backend.app.services.execution_service import (
     ExecutionServiceError,
     cancel_execution,
@@ -241,6 +242,26 @@ async def list_execution_artifacts_endpoint(
         )
         for a in artifacts
     ]
+
+
+@router.get("/{execution_id}/report")
+async def get_execution_report_endpoint(
+    execution_id: uuid.UUID, db: AsyncSession = Depends(get_db)
+) -> dict:
+    """An evidence-based engineering report — see
+    `backend.app.services.execution_report` for what "evidence-based" means
+    here. Available for any execution regardless of terminal/non-terminal
+    status; a still-running execution simply gets a partial report of
+    whatever real progress has been persisted so far."""
+    execution = await get_execution(db, execution_id)
+    if execution is None:
+        raise HTTPException(404, "Execution not found.")
+
+    project = await get_project(db, execution.project_id)
+    steps = await list_agent_steps_for_execution(db, execution_id)
+    artifacts = await list_artifacts_for_execution(db, execution_id)
+
+    return await build_execution_report(execution=execution, project=project, steps=steps, artifacts=artifacts)
 
 
 @router.post("/{execution_id}/cancel", status_code=202, response_model=ExecutionResponse)
