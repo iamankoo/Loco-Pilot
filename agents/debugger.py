@@ -77,6 +77,7 @@ class DebuggerAgent(BaseAgent):
             "current_agent": self.name,
             "retry_count": state.retry_count + 1,
             "execution_status": "developing",
+            "debug_result": debug_result,
             "tool_calls": _tool_call_records(tool_steps),
             "messages": [
                 f"Debugger: root cause — {debug_result.root_cause}. "

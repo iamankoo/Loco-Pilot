@@ -44,6 +44,10 @@ async def test_debugger_increments_retry_count() -> None:
     assert update["retry_count"] == state.retry_count + 1
     assert update["execution_status"] == "developing"
     assert "off by one" in update["messages"][0]
+    # The structured finding itself must be explicit state, not just folded
+    # into the free-text message trail — Developer's retry prompt relies on
+    # reading `debug_result` directly (see agents/developer.py).
+    assert update["debug_result"] is debug_result
 
 
 async def test_debugger_never_calls_a_write_tool() -> None:

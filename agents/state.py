@@ -56,6 +56,12 @@ class ExecutionState(BaseModel):
 
     test_results: TestResult | None = None
     retry_count: int = 0
+    # Debugger's most recent structured finding — explicit state so Developer
+    # (and persistence/observability) can rely on it directly rather than
+    # recovering it from the free-text `messages` trail. Last-write-wins,
+    # like `plan`/`test_results`/`review_result`: only ever meaningful for
+    # the retry cycle currently in progress.
+    debug_result: DebugResult | None = None
     review_result: ReviewResult | None = None
     final_result: dict | None = None
     execution_status: ExecutionStatusLiteral = "pending"

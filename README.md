@@ -31,8 +31,13 @@ What v1 includes:
   (non-root, read-only root filesystem, all capabilities dropped, no
   network by default, resource-limited) — never on the host.
 - Bounded autonomy: per-agent and execution-wide tool-call budgets, a
-  wall-clock execution timeout, and a bounded debug-retry loop, so a
-  misbehaving model can't run away with the process.
+  wall-clock execution timeout, a bounded debug-retry loop
+  (`MAX_DEBUG_RETRIES`), and an outer `MAX_AGENT_TURNS` cap on LangGraph's
+  own recursion limit beneath it, so a misbehaving model can't run away
+  with the process. Every graph transition is decided by explicit,
+  independently-testable routing functions — never by the LLM itself — and
+  a run is only ever reported "passed" if a real test run actually passed,
+  regardless of what the Reviewer's own verdict says.
 - Full execution/audit persistence (executions, agent steps, tool calls,
   artifacts) and a read API over it, with secrets scrubbed before anything
   is written to the database.

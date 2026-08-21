@@ -71,6 +71,12 @@ class Settings(BaseSettings):
     max_tool_calls_per_agent: int = 12
     max_total_tool_calls: int = 60
     max_execution_seconds: int = 900
+    # Hard cap on total LangGraph node visits for one execution (LangGraph's
+    # own `recursion_limit`) — the outer safety net beneath the debug-retry
+    # budget: even a routing bug or a pathological state could not make the
+    # graph loop forever, since LangGraph itself raises GraphRecursionError
+    # once this is exceeded.
+    max_agent_turns: int = 50
     # Character budget for RAG context handed to any single agent prompt.
     max_context_chars: int = 12_000
 

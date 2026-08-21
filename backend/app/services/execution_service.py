@@ -13,6 +13,8 @@ from __future__ import annotations
 import asyncio
 import uuid
 
+from langgraph.errors import GraphRecursionError
+
 from agents.graph import GraphDependencies, build_graph
 from agents.llm_client import LangChainStructuredLLMClient, StructuredLLMClient, UnavailableLLMClient
 from agents.state import ExecutionState
@@ -84,7 +86,13 @@ def _map_final_status(state: ExecutionState) -> ExecutionStatus:
         return ExecutionStatus.ERROR
     if state.review_result is None:
         return ExecutionStatus.NEEDS_REVIEW
-    if state.review_result.verdict == "approved":
+    # The graph, not the Reviewer's own judgement, owns whether a run can
+    # be reported as passed: an "approved" verdict is necessary but never
+    # sufficient — if the last real test run didn't actually pass (failed,
+    # errored, or was never run), the execution is not honestly a pass,
+    # regardless of what the model's review concluded.
+    tests_actually_passed = state.test_results is not None and state.test_results.status == "passed"
+    if state.review_result.verdict == "approved" and tests_actually_passed:
         return ExecutionStatus.PASSED
     return ExecutionStatus.NEEDS_REVIEW
 
@@ -137,6 +145,7 @@ async def run_execution(execution_id: uuid.UUID) -> None:
                 max_tool_calls_per_agent=settings.max_tool_calls_per_agent,
                 max_total_tool_calls=settings.max_total_tool_calls,
                 max_context_chars=settings.max_context_chars,
+                max_agent_turns=settings.max_agent_turns,
             )
             graph = build_graph(deps)
 
@@ -149,7 +158,7 @@ async def run_execution(execution_id: uuid.UUID) -> None:
 
             try:
                 final_state_dict = await asyncio.wait_for(
-                    graph.ainvoke(initial_state, config={"recursion_limit": 50}),
+                    graph.ainvoke(initial_state, config={"recursion_limit": settings.max_agent_turns}),
                     timeout=settings.max_execution_seconds,
                 )
                 final_state = ExecutionState.model_validate(final_state_dict)
@@ -160,6 +169,21 @@ async def run_execution(execution_id: uuid.UUID) -> None:
                     execution_id,
                     status=ExecutionStatus.TIMED_OUT,
                     error_message=f"Execution exceeded the {settings.max_execution_seconds}s time limit.",
+                    mark_completed=True,
+                )
+                return
+            except GraphRecursionError:
+                # The outer safety net beneath MAX_DEBUG_RETRIES: should not
+                # normally trigger (retry-budget routing already terminates
+                # the debug loop deterministically), but a routing bug or an
+                # unexpected state must still end in an honest, bounded
+                # failure rather than genuinely running away.
+                logger.warning("execution_exceeded_max_agent_turns", max_agent_turns=settings.max_agent_turns)
+                await update_execution_status(
+                    db,
+                    execution_id,
+                    status=ExecutionStatus.ERROR,
+                    error_message=f"Execution exceeded the maximum of {settings.max_agent_turns} agent turns.",
                     mark_completed=True,
                 )
                 return

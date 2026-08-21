@@ -4,7 +4,7 @@ import pytest
 
 from agents.developer import DeveloperAgent
 from agents.llm_client import LLMUnavailableError, ToolCallLimitError
-from agents.schemas import DeveloperPlan, Plan
+from agents.schemas import DebugResult, DeveloperPlan, Plan
 from agents.state import ExecutionState
 from tests.fakes import FakeStructuredLLMClient, FakeToolRunner
 from tools.execution_result import ToolExecutionResult
@@ -140,6 +140,37 @@ async def test_developer_can_read_before_editing_in_the_same_loop() -> None:
     assert called_tools == ["read_file", "edit_file"]
     assert update["files_changed"][0].change_type == "modified"
     assert len(update["tool_calls"]) == 2
+
+
+async def test_developer_retry_prompt_uses_the_debugger_finding_when_present() -> None:
+    """On a retry where Debugger has already investigated, the retry
+    prompt must be built from its structured `DebugResult`, not the crude
+    `messages[-5:]` fallback — that fallback is only for the case where no
+    structured finding exists yet."""
+    plan = Plan(objective="x", steps=["a"], testing_strategy="t")
+    debug_result = DebugResult(
+        root_cause="off-by-one error", proposed_fix="use <= instead of <", confidence="high", files_to_change=["calc.py"]
+    )
+    state = ExecutionState(
+        execution_id="11111111-1111-1111-1111-111111111111",
+        project_id="22222222-2222-2222-2222-222222222222",
+        user_task="fix the bug",
+        workspace_root="C:/tmp/does-not-matter",
+        plan=plan,
+        retry_count=1,
+        debug_result=debug_result,
+        messages=["this stale free-text note must not be what the prompt relies on"],
+    )
+    llm = FakeStructuredLLMClient({"DeveloperPlan": DeveloperPlan(summary="applied the fix")})
+    agent = DeveloperAgent(llm_client=llm, tools=FakeToolRunner(allowed={"read_file", "write_file", "edit_file"}))
+
+    await agent.run(state)
+
+    assert len(llm.tool_loop_calls) == 1
+    prompt = llm.tool_loop_calls[0]["user"]
+    assert "off-by-one error" in prompt
+    assert "use <= instead of <" in prompt
+    assert "calc.py" in prompt
 
 
 async def test_developer_tool_loop_is_bounded_by_max_tool_calls() -> None:

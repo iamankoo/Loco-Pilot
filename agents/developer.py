@@ -74,7 +74,15 @@ class DeveloperAgent(BaseAgent):
             raise ToolCallLimitError("The total tool-call budget for this execution is exhausted.")
 
         prior_context = ""
-        if state.retry_count > 0 and state.messages:
+        if state.debug_result is not None:
+            debug = state.debug_result
+            prior_context = (
+                "Debugger's investigation of the last failure:\n"
+                f"Root cause: {debug.root_cause}\n"
+                f"Proposed fix ({debug.confidence} confidence): {debug.proposed_fix}\n"
+                f"Files to change: {', '.join(debug.files_to_change) or '(unspecified)'}\n\n"
+            )
+        elif state.retry_count > 0 and state.messages:
             prior_context = "Prior attempt notes (most recent last):\n" + "\n".join(state.messages[-5:]) + "\n\n"
 
         context_text = state.repository_context.text if state.repository_context else ""

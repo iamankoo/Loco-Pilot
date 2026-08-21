@@ -77,6 +77,13 @@ class GraphDependencies:
     max_tool_calls_per_agent: int = 12
     max_total_tool_calls: int = 60
     max_context_chars: int = 12_000
+    # LangGraph's own `recursion_limit` — passed by the caller (see
+    # `backend.app.services.execution_service.run_execution`) to
+    # `graph.ainvoke(..., config={"recursion_limit": deps.max_agent_turns})`.
+    # Not read by anything in this module; kept alongside the other bounded-
+    # autonomy settings so one `GraphDependencies` instance fully describes
+    # an execution's limits.
+    max_agent_turns: int = 50
 
 
 def _summarize(value: object) -> object:
@@ -160,8 +167,15 @@ def make_agent_node(
 
     async def node(state: ExecutionState) -> dict:
         bind_execution_context(execution_id=state.execution_id, agent=agent_cls.name)
+        logger.info(
+            "agent_turn_started",
+            previous_agent=state.current_agent,
+            next_agent=agent_cls.name,
+            retry_count=state.retry_count,
+        )
 
         if is_cancelled(uuid.UUID(state.execution_id)):
+            logger.info("agent_turn_skipped", next_agent=agent_cls.name, reason="cancellation_requested")
             return {
                 "current_agent": agent_cls.name,
                 "execution_status": "cancelled",
@@ -194,7 +208,7 @@ def make_agent_node(
         try:
             update = await agent.run(run_state)
         except Exception as exc:  # noqa: BLE001 - agent failures become structured state, never crash the graph
-            logger.exception("agent_failed", agent=agent_cls.name)
+            logger.exception("agent_turn_failed", next_agent=agent_cls.name, retry_count=state.retry_count)
             if step is not None:
                 await complete_agent_step(
                     deps.db, step.id, status=AgentStepStatus.FAILED, error_message=scrub_secrets(str(exc))
@@ -216,6 +230,12 @@ def make_agent_node(
             output_summary = scrub_secrets({k: _summarize(v) for k, v in update.items()})
             await complete_agent_step(deps.db, step.id, status=AgentStepStatus.SUCCEEDED, output_metadata=output_summary)
 
+        logger.info(
+            "agent_turn_completed",
+            next_agent=agent_cls.name,
+            retry_count=update.get("retry_count", state.retry_count),
+            status=update.get("execution_status", state.execution_status),
+        )
         return update
 
     return node
@@ -224,6 +244,14 @@ def make_agent_node(
 def make_orchestrator_node(deps: GraphDependencies) -> Callable[[ExecutionState], "object"]:
     async def node(state: ExecutionState) -> dict:
         bind_execution_context(execution_id=state.execution_id, agent="orchestrator")
+
+        if is_cancelled(uuid.UUID(state.execution_id)):
+            logger.info("agent_turn_skipped", next_agent="orchestrator", reason="cancellation_requested")
+            return {
+                "current_agent": "orchestrator",
+                "execution_status": "cancelled",
+                "messages": ["Execution cancelled before orchestrator started."],
+            }
 
         repository_context = None
         if deps.db is not None:
