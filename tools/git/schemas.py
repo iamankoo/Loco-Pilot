@@ -24,6 +24,12 @@ class GitStatusOutput(BaseModel):
 class GitDiffInput(BaseModel):
     staged: bool = False
     path: str | None = None
+    # Phase 2.9: scope the diff to exactly these paths (e.g. the
+    # execution's own FileChange paths) instead of the whole working
+    # tree — so a diff shown to Reviewer never includes the user's own
+    # pre-existing uncommitted changes, which the workspace is never
+    # assumed to have started without. Ignored when `path` is also given.
+    paths: list[str] = Field(default_factory=list)
 
 
 class GitDiffOutput(BaseModel):

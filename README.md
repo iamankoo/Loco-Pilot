@@ -158,6 +158,21 @@ Next.js dashboard  ──HTTP──>  FastAPI (backend/app)
   `agents.state.compute_honest_status`, used identically by the graph's
   own finalize node and the service layer's DB-status mapping, so the
   two can never disagree with each other.
+- **Git awareness**: a workspace is never assumed to start clean — the
+  Orchestrator's `ProjectContext` captures the real branch/status *before*
+  any agent runs, and `state.files_changed` (populated only from
+  Developer's own real tool calls) is the authoritative record of what this
+  execution actually did. `git_diff` accepts a `paths` scope
+  (`tools/git/tools.py`); the Reviewer always scopes it to exactly
+  `files_changed`'s own paths, so a diff it reviews can never include the
+  user's own pre-existing uncommitted work. Branch creation/checkout is
+  wired but ungranted to any agent (`GIT_WRITE` is outside
+  `DEVELOPER_PERMISSIONS`), and `git_commit` remains, as in Phase 1.2,
+  unregistered as an agent-callable tool — LocoPilot never commits or
+  pushes on its own. `agents/commit_summary.py` generates a
+  conventional-commit-style message from real persisted state (files
+  changed, test/review outcome) for a human to use when they choose to
+  commit — it never executes a commit itself.
 - **Persistence** (`backend/app/db/`): SQLAlchemy async models + Alembic
   migrations for projects, executions, agent steps, tool calls, and
   artifacts. Secrets are scrubbed (`backend/app/security/secret_scrubber.py`)

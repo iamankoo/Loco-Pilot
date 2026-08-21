@@ -135,6 +135,14 @@ class GitDiffTool(Tool[GitDiffInput, GitDiffOutput]):
             except WorkspaceError as exc:
                 raise ToolError(str(exc)) from exc
             args += ["--", str(resolved)]
+        elif tool_input.paths:
+            resolved_paths = []
+            for p in tool_input.paths:
+                try:
+                    resolved_paths.append(str(context.workspace.resolve(p)))
+                except WorkspaceError as exc:
+                    raise ToolError(str(exc)) from exc
+            args += ["--", *resolved_paths]
 
         code, stdout, stderr = await _run_git(context.workspace, args)
         if code != 0:

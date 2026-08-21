@@ -103,8 +103,14 @@ class ReviewerAgent(BaseAgent):
         if self.llm_client is None:
             raise LLMUnavailableError("No LLM client is configured; Reviewer cannot run.")
 
+        # Phase 2.9: scope the diff to exactly the paths this execution's
+        # own tool calls touched, never the whole working tree — a
+        # workspace is never assumed to have started clean, so an
+        # unscoped `git diff` could otherwise attribute the user's own
+        # pre-existing uncommitted work to this execution.
+        execution_paths = sorted({f.path for f in state.files_changed if f.change_type != "failed"})
         diff_text = "(no diff available)"
-        diff_result = await self.tools.call("git_diff", {})
+        diff_result = await self.tools.call("git_diff", {"paths": execution_paths} if execution_paths else {})
         if diff_result.status == "success" and diff_result.output:
             diff_text = diff_result.output.get("diff") or "(empty diff)"
 
