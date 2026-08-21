@@ -39,7 +39,7 @@ class DeveloperPlan(BaseModel):
 
 class FileChange(BaseModel):
     path: str
-    change_type: Literal["created", "modified", "failed"]
+    change_type: Literal["created", "modified", "deleted", "renamed", "failed"]
     detail: str
 
 

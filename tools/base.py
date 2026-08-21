@@ -37,7 +37,17 @@ class ToolError(Exception):
 
     Distinct from an unhandled exception: callers treat this as an
     expected, loggable/persistable failure with a clear message, not a bug.
+
+    `code` is an optional, coarse machine-checkable classification (e.g.
+    "FILE_NOT_FOUND", "PATH_OUTSIDE_WORKSPACE", "DESTINATION_EXISTS") for
+    callers/tests that want to branch on failure kind rather than parse the
+    message text — purely additive: every existing `raise ToolError("...")`
+    call site is unaffected and `str(exc)` still yields just the message.
     """
+
+    def __init__(self, message: str, *, code: str | None = None) -> None:
+        super().__init__(message)
+        self.code = code
 
 
 class ToolPermissionError(ToolError):

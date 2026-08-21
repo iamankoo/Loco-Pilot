@@ -27,7 +27,14 @@ def test_developer_plan_requires_summary() -> None:
 
 def test_file_change_rejects_invalid_change_type() -> None:
     with pytest.raises(ValidationError):
-        FileChange(path="a.py", change_type="deleted", detail="x")  # not a valid literal
+        FileChange(path="a.py", change_type="renamed_to_somewhere", detail="x")  # not a valid literal
+
+
+def test_file_change_accepts_deleted_and_renamed() -> None:
+    # Phase 2.3 added delete_file/move_file tool support alongside the
+    # original write_file/edit_file-only change types.
+    assert FileChange(path="a.py", change_type="deleted", detail="x").change_type == "deleted"
+    assert FileChange(path="a.py", change_type="renamed", detail="x").change_type == "renamed"
 
 
 def test_test_result_rejects_invalid_status() -> None:

@@ -60,7 +60,7 @@ logger = get_logger(component="graph")
 # Debugger is granted WRITE at the permission-table level (see
 # agents/permissions.py) but this implementation only ever investigates —
 # its tool-calling loop is scoped to these read-only tool names.
-_DEBUGGER_TOOL_NAMES = {"read_file", "search_files", "list_directory", "git_status", "git_diff"}
+_DEBUGGER_TOOL_NAMES = {"read_file", "search_files", "list_directory", "file_exists", "git_status", "git_diff"}
 
 # Which agent roles benefit from a stage-specific RAG re-retrieval beyond
 # the Orchestrator's initial task-based retrieval (Planner already
@@ -153,7 +153,13 @@ async def _reindex_changed_files(state: ExecutionState, update: dict, deps: Grap
     if deps.db is None:
         return
     files_changed = update.get("files_changed") or []
-    changed_paths = [f.path for f in files_changed if f.change_type in ("created", "modified")]
+    # "deleted" is included so a removed file's stale chunks are cleared
+    # from the RAG index (`RepositoryIndexer.index_file` clears chunks for
+    # a path that no longer exists on disk) rather than lingering forever.
+    # "renamed" reindexes the new path; the old path's stale chunks are a
+    # known limitation (see README) since `FileChange` doesn't carry the
+    # rename's source path structurally.
+    changed_paths = [f.path for f in files_changed if f.change_type in ("created", "modified", "deleted", "renamed")]
     if not changed_paths:
         return
     try:

@@ -192,3 +192,106 @@ async def test_developer_tool_loop_is_bounded_by_max_tool_calls() -> None:
 
     assert len(tools.calls) == 2
     assert len(update["tool_calls"]) == 2
+
+
+async def test_developer_tracks_a_successful_delete_as_deleted() -> None:
+    plan = Plan(objective="x", steps=["a"], testing_strategy="t")
+    llm = FakeStructuredLLMClient(
+        {"DeveloperPlan": DeveloperPlan(summary="removed the obsolete file")},
+        tool_call_scripts=[[("delete_file", {"path": "old.py"})]],
+    )
+    tools = FakeToolRunner(
+        allowed={"read_file", "write_file", "edit_file", "delete_file"},
+        responses={
+            "delete_file": ToolExecutionResult(
+                tool_name="delete_file",
+                status="success",
+                output={"path": "old.py", "deleted": True, "was_directory": False, "diff": "-old\n", "diff_truncated": False},
+                error=None,
+                duration_ms=1,
+            )
+        },
+    )
+
+    agent = DeveloperAgent(llm_client=llm, tools=tools)
+    update = await agent.run(_state_with_plan(plan))
+
+    assert update["files_changed"][0].path == "old.py"
+    assert update["files_changed"][0].change_type == "deleted"
+
+
+async def test_developer_tracks_a_successful_move_as_renamed() -> None:
+    plan = Plan(objective="x", steps=["a"], testing_strategy="t")
+    llm = FakeStructuredLLMClient(
+        {"DeveloperPlan": DeveloperPlan(summary="renamed the module")},
+        tool_call_scripts=[[("move_file", {"source_path": "old_name.py", "destination_path": "new_name.py"})]],
+    )
+    tools = FakeToolRunner(
+        allowed={"read_file", "write_file", "edit_file", "move_file"},
+        responses={
+            "move_file": ToolExecutionResult(
+                tool_name="move_file",
+                status="success",
+                output={
+                    "source_path": "old_name.py", "destination_path": "new_name.py", "moved": True, "was_directory": False
+                },
+                error=None,
+                duration_ms=1,
+            )
+        },
+    )
+
+    agent = DeveloperAgent(llm_client=llm, tools=tools)
+    update = await agent.run(_state_with_plan(plan))
+
+    assert update["files_changed"][0].path == "new_name.py"
+    assert update["files_changed"][0].change_type == "renamed"
+    assert "old_name.py" in update["files_changed"][0].detail
+
+
+async def test_developer_tracks_a_failed_delete_honestly() -> None:
+    plan = Plan(objective="x", steps=["a"], testing_strategy="t")
+    llm = FakeStructuredLLMClient(
+        {"DeveloperPlan": DeveloperPlan(summary="attempted cleanup")},
+        tool_call_scripts=[[("delete_file", {"path": "important.py"})]],
+    )
+    tools = FakeToolRunner(
+        allowed={"read_file", "write_file", "edit_file", "delete_file"},
+        responses={
+            "delete_file": ToolExecutionResult(
+                tool_name="delete_file", status="error", output=None, error="Directory is not empty", duration_ms=1
+            )
+        },
+    )
+
+    agent = DeveloperAgent(llm_client=llm, tools=tools)
+    update = await agent.run(_state_with_plan(plan))
+
+    assert update["files_changed"][0].change_type == "failed"
+    assert "not empty" in update["files_changed"][0].detail
+
+
+async def test_developer_prompt_includes_workspace_scans_relevant_files_as_a_hint() -> None:
+    """Phase 2.2's ProjectContext.relevant_files must reach Developer's
+    prompt — as a hint to investigate, not an instruction to blindly
+    modify (the prompt text must make that distinction explicit)."""
+    from analysis.context import ProjectContext
+    from analysis.relevant_files import RelevantFile
+
+    plan = Plan(objective="x", steps=["a"], testing_strategy="t")
+    state = _state_with_plan(plan).model_copy(
+        update={
+            "project_context": ProjectContext(
+                workspace_root="C:/tmp/does-not-matter",
+                relevant_files=[RelevantFile(path="backend/app/auth/auth_service.py", reason="path matches: auth", score=2.0)],
+            )
+        }
+    )
+    llm = FakeStructuredLLMClient({"DeveloperPlan": DeveloperPlan(summary="done")})
+    agent = DeveloperAgent(llm_client=llm, tools=FakeToolRunner(allowed={"read_file", "write_file", "edit_file"}))
+
+    await agent.run(state)
+
+    prompt = llm.tool_loop_calls[0]["user"]
+    assert "backend/app/auth/auth_service.py" in prompt
+    assert "hint, not an instruction" in prompt

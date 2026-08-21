@@ -67,8 +67,11 @@ def build_default_registry() -> ToolRegistry:
     registered, backed by the real Docker sandbox (`execution.docker`).
     """
     from tools.filesystem.tools import (
+        DeleteFileTool,
         EditFileTool,
+        FileExistsTool,
         ListDirectoryTool,
+        MoveFileTool,
         ReadFileTool,
         SearchFilesTool,
         WriteFileTool,
@@ -87,6 +90,9 @@ def build_default_registry() -> ToolRegistry:
         ReadFileTool(),
         WriteFileTool(),
         EditFileTool(),
+        DeleteFileTool(),
+        MoveFileTool(),
+        FileExistsTool(),
         SearchFilesTool(),
         GitStatusTool(),
         GitDiffTool(),

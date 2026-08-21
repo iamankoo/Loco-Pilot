@@ -93,12 +93,23 @@ Next.js dashboard  ──HTTP──>  FastAPI (backend/app)
   calculator") provisions a brand-new workspace when no match exists — a
   read/fix/check task naming a project that doesn't exist honestly reports
   "not found" instead of silently creating an empty directory.
-- **Tools** (`tools/`): filesystem, git, and terminal tools, each declared
-  with a Pydantic input/output schema and a required `Permission`. Every
-  path is resolved through `tools/workspace.py`'s `Workspace`, which rejects
-  absolute paths, `../` traversal, and symlink escapes — the single
-  boundary every tool, and the dashboard's file-browsing/upload endpoints,
-  rely on.
+- **Tools** (`tools/`): filesystem (`list_directory`, `read_file`,
+  `write_file`, `edit_file`, `delete_file`, `move_file`, `file_exists`,
+  `search_files`), git, and terminal tools, each declared with a Pydantic
+  input/output schema and a required `Permission`. Every path is resolved
+  through `tools/workspace.py`'s `Workspace`, which rejects absolute paths,
+  `../` traversal, and symlink escapes — the single boundary every tool,
+  and the dashboard's file-browsing/upload endpoints, rely on. Every
+  mutating call (`write_file`/`edit_file`/`delete_file`) verifies the
+  filesystem actually reflects the change before reporting success and
+  returns a bounded unified diff (`tools/diffing.py`); `delete_file`
+  refuses to remove a non-empty directory without `recursive=True` or the
+  workspace root under any circumstances, and `move_file` never silently
+  overwrites an existing file or directory. Only Developer holds `WRITE`
+  (Planner/Tester/Reviewer are read-only, and Debugger — though granted
+  `WRITE` at the permission-table level for interface completeness — is
+  restricted to a read-only tool allowlist at the graph level, so it only
+  ever diagnoses, never mutates).
 - **Sandbox** (`execution/docker/`): one Docker container per
   `execute_terminal_command` call, driven via the `docker` CLI (never the
   Docker SDK, never a shell string) — non-root, read-only root filesystem,
