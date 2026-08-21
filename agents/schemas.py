@@ -53,10 +53,19 @@ class DeveloperResult(BaseModel):
 
 
 class TestResult(BaseModel):
-    status: Literal["passed", "failed", "unavailable", "error"]
+    status: Literal["passed", "failed", "timed_out", "unavailable", "error"]
+    # The detected test framework this result came from (e.g. "pytest",
+    # "Jest"), when a real command actually ran — None for "unavailable".
+    framework: str | None = None
     commands: list[str] = Field(default_factory=list)
     passed: int = 0
     failed: int = 0
+    skipped: int = 0
+    # Individual failing test identifiers parsed from real output (e.g.
+    # "tests/test_auth.py::test_login"), bounded — not a claim of parsing
+    # every framework's output format perfectly.
+    failing_tests: list[str] = Field(default_factory=list)
+    duration_ms: int | None = None
     errors: list[str] = Field(default_factory=list)
     summary: str
 

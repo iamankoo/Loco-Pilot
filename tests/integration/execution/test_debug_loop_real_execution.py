@@ -30,7 +30,7 @@ from pathlib import Path
 from sqlalchemy import select
 
 from agents.graph import GraphDependencies, build_graph
-from agents.schemas import DebugResult, DeveloperPlan, Plan, ReviewResult, TestResult
+from agents.schemas import DebugResult, DeveloperPlan, Plan, ReviewResult
 from agents.state import ExecutionState
 from backend.app.db.models.agent_step import AgentStep
 from backend.app.db.repositories.executions import create_execution
@@ -89,27 +89,6 @@ async def test_debug_loop_with_real_docker_execution_fixes_the_bug(db_session, t
                 files_to_change=["calculator.py"],
             ),
             "DeveloperPlan": DeveloperPlan(summary="implemented the plan via tool calls"),
-            # Tester delegates structured interpretation to the LLM whenever
-            # one is configured (see agents/tester.py) — these two values
-            # correctly reflect the real exit code each real pytest run
-            # produces (nonzero before the fix, zero after).
-            "TestResult": [
-                TestResult(
-                    status="failed",
-                    commands=["python -m pytest"],
-                    passed=1,
-                    failed=1,
-                    errors=["test_multiply: multiply(2, 3) returned 5, expected 6"],
-                    summary="1 of 2 tests failed: test_multiply",
-                ),
-                TestResult(
-                    status="passed",
-                    commands=["python -m pytest"],
-                    passed=2,
-                    failed=0,
-                    summary="all tests passed",
-                ),
-            ],
             "ReviewResult": ReviewResult(verdict="approved", summary="fix verified by a passing test suite"),
         },
         # generate_with_tools is called three times in this run, in this

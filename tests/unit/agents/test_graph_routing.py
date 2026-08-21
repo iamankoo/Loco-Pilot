@@ -55,6 +55,13 @@ def test_route_after_tester_never_exceeds_max_retries_regardless_of_repeated_fai
         assert route_after_tester(state, max_retries=2) == "reviewer"
 
 
+def test_route_after_tester_goes_to_debugger_when_timed_out_and_retries_remain() -> None:
+    """A test command timing out is worth debugging too — it may be a
+    real bug (e.g. an infinite loop) Developer just introduced."""
+    state = _state(test_results=TestResult(status="timed_out", summary="x"), retry_count=0)
+    assert route_after_tester(state, max_retries=2) == "debugger"
+
+
 def test_route_after_tester_finalizes_on_error() -> None:
     state = _state(execution_status="error", test_results=TestResult(status="failed", summary="x"))
     assert route_after_tester(state, max_retries=2) == "finalize"

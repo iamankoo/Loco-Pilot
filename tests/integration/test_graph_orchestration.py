@@ -16,7 +16,7 @@ import pytest
 from sqlalchemy import select
 
 from agents.graph import GraphDependencies, build_graph
-from agents.schemas import DebugResult, DeveloperPlan, Plan, ReviewResult, TestResult
+from agents.schemas import DebugResult, DeveloperPlan, Plan, ReviewResult
 from agents.state import ExecutionState
 from backend.app.db.models.agent_step import AgentStep
 from backend.app.db.repositories.executions import create_execution
@@ -29,25 +29,25 @@ from tools.terminal.tools import ExecuteTerminalCommandTool
 from tools.workspace import Workspace
 
 
-def _make_test_command_succeed_at_the_tool_layer(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Tester only asks the LLM to interpret a `TestResult` once a real
-    command execution actually reports `status="success"` (see
-    `agents/tester.py`) — otherwise it honestly reports "unavailable"
-    without ever consulting the LLM. Exercising the debug loop through the
-    real graph therefore needs the terminal tool itself to report success
-    (a fixed exit code is enough; the *meaning* of pass/fail for these
-    tests comes entirely from the scripted `TestResult` responses handed
-    to `FakeStructuredLLMClient`, not from this canned exit code), without
+def _make_test_command_report(monkeypatch: pytest.MonkeyPatch, outcomes: list[tuple[int, str]]) -> None:
+    """Makes the real `execute_terminal_command` tool report a scripted
+    sequence of (exit_code, stdout) pairs on successive calls, without
     requiring a live Docker sandbox — Docker availability is an
     environment fact, not something a deterministic unit/integration test
-    should depend on.
+    should depend on. Tester's status/count interpretation is always
+    computed deterministically from these values (see `agents/tester.py`),
+    never from an LLM, so these exit codes are the actual, sole source of
+    truth for pass/fail in every test below — not a scripted `TestResult`.
+    The queue repeats its last entry once exhausted.
     """
+    queue = list(outcomes)
 
     async def fake_run(self, tool_input, context):  # noqa: ANN001 - matches Tool.run's signature
+        exit_code, stdout = queue.pop(0) if queue else outcomes[-1]
         return TerminalCommandResult(
             command=tool_input.command,
-            exit_code=0,
-            stdout="",
+            exit_code=exit_code,
+            stdout=stdout,
             stderr="",
             stdout_truncated=False,
             stderr_truncated=False,
@@ -77,7 +77,7 @@ async def test_debug_path_recovers_and_reaches_reviewer(
     """Planner -> Developer -> Tester FAIL -> Debugger -> Developer ->
     Tester PASS -> Reviewer -> finalize, with real AgentStep rows for the
     whole path and important state surviving the round trip."""
-    _make_test_command_succeed_at_the_tool_layer(monkeypatch)
+    _make_test_command_report(monkeypatch, [(1, "1 failed"), (0, "1 passed")])
     (tmp_git_workspace.root / "pyproject.toml").write_text("[project]\nname = \"sample\"\n", encoding="utf-8")
 
     project = await create_project(db_session, name=f"proj-{uuid.uuid4()}", workspace_path=str(tmp_git_workspace.root))
@@ -87,10 +87,6 @@ async def test_debug_path_recovers_and_reaches_reviewer(
         {
             "Plan": Plan(objective="fix it", steps=["find and fix the bug"], testing_strategy="pytest"),
             "DeveloperPlan": DeveloperPlan(summary="applied a fix"),
-            "TestResult": [
-                TestResult(status="failed", summary="1 failed", errors=["AssertionError: boom"]),
-                TestResult(status="passed", summary="1 passed"),
-            ],
             "DebugResult": DebugResult(
                 root_cause="off-by-one error", proposed_fix="use <= instead of <", confidence="high",
                 files_to_change=["calc.py"],
@@ -133,7 +129,8 @@ async def test_repeated_failure_terminates_exactly_at_configured_retry_limit(
     """Tester fails every single time (Debugger's fix never actually
     works) — the graph must still terminate deterministically, exactly
     once the configured retry budget is spent, never looping forever."""
-    _make_test_command_succeed_at_the_tool_layer(monkeypatch)
+    # Always failed — the same failure, every single time.
+    _make_test_command_report(monkeypatch, [(1, "1 failed")])
     (tmp_git_workspace.root / "pyproject.toml").write_text("[project]\nname = \"sample\"\n", encoding="utf-8")
 
     project = await create_project(db_session, name=f"proj-{uuid.uuid4()}", workspace_path=str(tmp_git_workspace.root))
@@ -144,8 +141,6 @@ async def test_repeated_failure_terminates_exactly_at_configured_retry_limit(
         {
             "Plan": Plan(objective="fix it", steps=["investigate"], testing_strategy="pytest"),
             "DeveloperPlan": DeveloperPlan(summary="attempted a fix"),
-            # Always failed — the same failure, every single time.
-            "TestResult": TestResult(status="failed", summary="still failing", errors=["same assertion"]),
             "DebugResult": DebugResult(
                 root_cause="unclear", proposed_fix="try something else", confidence="low", files_to_change=[]
             ),
@@ -279,7 +274,7 @@ async def test_graph_recursion_limit_is_a_hard_backstop_beyond_the_retry_budget(
     every time here) from running away."""
     from langgraph.errors import GraphRecursionError
 
-    _make_test_command_succeed_at_the_tool_layer(monkeypatch)
+    _make_test_command_report(monkeypatch, [(1, "1 failed")])
     (tmp_git_workspace.root / "pyproject.toml").write_text("[project]\nname = \"sample\"\n", encoding="utf-8")
 
     project = await create_project(db_session, name=f"proj-{uuid.uuid4()}", workspace_path=str(tmp_git_workspace.root))
@@ -289,7 +284,6 @@ async def test_graph_recursion_limit_is_a_hard_backstop_beyond_the_retry_budget(
         {
             "Plan": Plan(objective="fix it", steps=["investigate"], testing_strategy="pytest"),
             "DeveloperPlan": DeveloperPlan(summary="attempted a fix"),
-            "TestResult": TestResult(status="failed", summary="still failing"),
             "DebugResult": DebugResult(root_cause="?", proposed_fix="?", confidence="low", files_to_change=[]),
             "ReviewResult": ReviewResult(verdict="changes_required", summary="not fixed"),
         }

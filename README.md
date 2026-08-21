@@ -119,6 +119,16 @@ Next.js dashboard  ──HTTP──>  FastAPI (backend/app)
 - **RAG** (`rag/`): repository -> chunking -> embedding -> pgvector ->
   hybrid retrieval -> bounded context assembly, feeding Planner/Developer/
   Debugger. See [RAG architecture](#rag-architecture) below.
+- **Tester** (`agents/tester.py`): reuses the Orchestrator's own
+  `ProjectContext` for framework detection (never re-scans the workspace
+  itself) and prefers a targeted test selection
+  (`analysis/test_selection.py` — the changed files' own directory/name
+  plus the task's keywords) over the whole suite, falling back to the
+  detected test directory and then the bare framework command only when
+  nothing more specific matches. Status, pass/fail/skipped counts, and
+  failing test names are always parsed deterministically from the real
+  exit code and output of the actual command that ran inside the Docker
+  sandbox — never from an LLM's reading of the output.
 - **Persistence** (`backend/app/db/`): SQLAlchemy async models + Alembic
   migrations for projects, executions, agent steps, tool calls, and
   artifacts. Secrets are scrubbed (`backend/app/security/secret_scrubber.py`)

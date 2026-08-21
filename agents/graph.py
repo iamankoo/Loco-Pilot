@@ -373,7 +373,7 @@ def route_after_tester(state: ExecutionState, max_retries: int) -> str:
         return "finalize"
     if (
         state.test_results is not None
-        and state.test_results.status in ("failed", "error")
+        and state.test_results.status in ("failed", "error", "timed_out")
         and state.retry_count < max_retries
     ):
         return "debugger"

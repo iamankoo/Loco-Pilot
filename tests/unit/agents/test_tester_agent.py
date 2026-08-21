@@ -1,10 +1,25 @@
 from __future__ import annotations
 
-from agents.schemas import TestResult
+from agents.schemas import FileChange
 from agents.state import ExecutionState
 from agents.tester import TesterAgent
+from analysis.context import ProjectContext
+from analysis.scanner import RepositoryStructure
 from tests.fakes import FakeStructuredLLMClient, FakeToolRunner
 from tools.execution_result import ToolExecutionResult
+
+
+def _project_context(
+    *, test_frameworks: list[str], files: list[str], test_directories: list[str], config_files: list[str] | None = None
+) -> ProjectContext:
+    return ProjectContext(
+        workspace_root="C:/tmp/does-not-matter",
+        test_frameworks=test_frameworks,
+        structure=RepositoryStructure(
+            root="C:/tmp/does-not-matter", files=files, test_directories=test_directories, config_files=config_files or []
+        ),
+        test_directories=test_directories,
+    )
 
 
 def _state() -> ExecutionState:
@@ -69,8 +84,10 @@ async def test_tester_reports_unavailable_when_no_project_marker_found() -> None
 
 
 async def test_tester_detects_python_project_and_runs_pytest() -> None:
-    test_result = TestResult(status="passed", commands=["python -m pytest"], passed=3, failed=0, summary="3 passed")
-    llm = FakeStructuredLLMClient({"TestResult": test_result})
+    """Phase 2.6: status/counts are parsed deterministically from the real
+    output — Tester no longer asks an LLM to interpret the result at all,
+    so a configured LLM client is irrelevant to (and untouched by) this."""
+    llm = FakeStructuredLLMClient()  # would raise if Tester ever called it
     tools = FakeToolRunner(
         allowed={"list_directory", "execute_terminal_command"},
         responses={
@@ -97,8 +114,13 @@ async def test_tester_detects_python_project_and_runs_pytest() -> None:
     agent = TesterAgent(llm_client=llm, tools=tools)
     update = await agent.run(_state())
 
-    assert update["test_results"] == test_result
-    assert len(llm.calls) == 1
+    result = update["test_results"]
+    assert result.status == "passed"
+    assert result.framework == "pytest"
+    assert result.passed == 3
+    assert result.failed == 0
+    assert result.duration_ms == 400
+    assert llm.calls == []
 
     exec_calls = [inp for name, inp in tools.calls if name == "execute_terminal_command"]
     assert exec_calls[0]["command"] == ["python", "-m", "pytest"]
@@ -153,3 +175,188 @@ async def test_tester_reports_error_when_execution_tool_itself_fails() -> None:
 
     assert update["test_results"].status == "error"
     assert "docker executable not found" in update["test_results"].errors[0]
+
+
+async def test_tester_targets_the_changed_files_tests_when_project_context_available() -> None:
+    """Phase 2.6: given a real ProjectContext (as the Orchestrator builds
+    it), Tester prefers a targeted test path over the whole suite."""
+    project_context = _project_context(
+        test_frameworks=["pytest"],
+        files=["auth/jwt.py", "payments/stripe.py", "tests/test_auth.py", "tests/test_payments.py"],
+        test_directories=["tests"],
+    )
+    state = _state().model_copy(
+        update={
+            "project_context": project_context,
+            "files_changed": [FileChange(path="auth/jwt.py", change_type="modified", detail="edited")],
+        }
+    )
+    tools = FakeToolRunner(
+        allowed={"execute_terminal_command"},
+        responses={
+            "execute_terminal_command": ToolExecutionResult(
+                tool_name="execute_terminal_command",
+                status="success",
+                output={
+                    "command": ["python", "-m", "pytest", "tests/test_auth.py"],
+                    "exit_code": 0,
+                    "stdout": "1 passed in 0.1s",
+                    "stderr": "",
+                    "stdout_truncated": False,
+                    "stderr_truncated": False,
+                    "duration_ms": 100,
+                    "timed_out": False,
+                },
+                error=None,
+                duration_ms=100,
+            )
+        },
+    )
+
+    agent = TesterAgent(llm_client=None, tools=tools)
+    update = await agent.run(state)
+
+    assert update["test_results"].commands == ["python -m pytest tests/test_auth.py"]
+    assert update["test_results"].framework == "pytest"
+
+
+async def test_tester_falls_back_to_test_directory_when_no_targeted_match() -> None:
+    project_context = _project_context(
+        test_frameworks=["pytest"], files=["app.py", "tests/test_widgets.py"], test_directories=["tests"]
+    )
+    state = _state().model_copy(update={"project_context": project_context, "user_task": "improve performance"})
+    tools = FakeToolRunner(
+        allowed={"execute_terminal_command"},
+        responses={
+            "execute_terminal_command": ToolExecutionResult(
+                tool_name="execute_terminal_command",
+                status="success",
+                output={
+                    "command": ["python", "-m", "pytest", "tests"],
+                    "exit_code": 0,
+                    "stdout": "1 passed",
+                    "stderr": "",
+                    "stdout_truncated": False,
+                    "stderr_truncated": False,
+                    "duration_ms": 50,
+                    "timed_out": False,
+                },
+                error=None,
+                duration_ms=50,
+            )
+        },
+    )
+
+    agent = TesterAgent(llm_client=None, tools=tools)
+    update = await agent.run(state)
+
+    assert update["test_results"].commands == ["python -m pytest tests"]
+
+
+async def test_tester_prefers_pytest_over_unittest_when_a_pytest_marker_file_exists() -> None:
+    """analysis.detection falls back to declaring "unittest" whenever no
+    framework dependency is declared at all — Tester's own marker-file
+    check upgrades that guess to pytest when a config file only pytest
+    actually uses (pytest.ini) is present, since pytest is a strict
+    superset of unittest's own discovery."""
+    project_context = _project_context(
+        test_frameworks=["unittest"],
+        files=["app.py", "test_app.py"],
+        test_directories=[],
+        config_files=["pytest.ini"],
+    )
+    state = _state().model_copy(update={"project_context": project_context})
+    tools = FakeToolRunner(
+        allowed={"execute_terminal_command"},
+        responses={
+            "execute_terminal_command": ToolExecutionResult(
+                tool_name="execute_terminal_command",
+                status="success",
+                output={
+                    "command": ["python", "-m", "pytest"],
+                    "exit_code": 0,
+                    "stdout": "1 passed",
+                    "stderr": "",
+                    "stdout_truncated": False,
+                    "stderr_truncated": False,
+                    "duration_ms": 50,
+                    "timed_out": False,
+                },
+                error=None,
+                duration_ms=50,
+            )
+        },
+    )
+
+    agent = TesterAgent(llm_client=None, tools=tools)
+    update = await agent.run(state)
+
+    assert update["test_results"].framework == "pytest"
+    assert update["test_results"].commands == ["python -m pytest"]
+
+
+async def test_tester_parses_jest_style_passing_and_failing_counts() -> None:
+    project_context = _project_context(
+        test_frameworks=["Jest"], files=["auth.test.js"], test_directories=[]
+    )
+    state = _state().model_copy(update={"project_context": project_context})
+    tools = FakeToolRunner(
+        allowed={"execute_terminal_command"},
+        responses={
+            "execute_terminal_command": ToolExecutionResult(
+                tool_name="execute_terminal_command",
+                status="success",
+                output={
+                    "command": ["npx", "jest"],
+                    "exit_code": 1,
+                    "stdout": "Tests:       1 failed, 3 passed, 4 total",
+                    "stderr": "",
+                    "stdout_truncated": False,
+                    "stderr_truncated": False,
+                    "duration_ms": 200,
+                    "timed_out": False,
+                },
+                error=None,
+                duration_ms=200,
+            )
+        },
+    )
+
+    agent = TesterAgent(llm_client=None, tools=tools)
+    update = await agent.run(state)
+
+    result = update["test_results"]
+    assert result.status == "failed"
+    assert result.passed == 3
+    assert result.failed == 1
+
+
+async def test_tester_reports_timed_out_status_honestly() -> None:
+    project_context = _project_context(test_frameworks=["pytest"], files=["app.py"], test_directories=[])
+    state = _state().model_copy(update={"project_context": project_context})
+    tools = FakeToolRunner(
+        allowed={"execute_terminal_command"},
+        responses={
+            "execute_terminal_command": ToolExecutionResult(
+                tool_name="execute_terminal_command",
+                status="success",
+                output={
+                    "command": ["python", "-m", "pytest"],
+                    "exit_code": None,
+                    "stdout": "",
+                    "stderr": "",
+                    "stdout_truncated": False,
+                    "stderr_truncated": False,
+                    "duration_ms": 120000,
+                    "timed_out": True,
+                },
+                error=None,
+                duration_ms=120000,
+            )
+        },
+    )
+
+    agent = TesterAgent(llm_client=None, tools=tools)
+    update = await agent.run(state)
+
+    assert update["test_results"].status == "timed_out"

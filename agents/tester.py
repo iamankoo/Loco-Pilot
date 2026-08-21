@@ -1,39 +1,122 @@
 """Tester: determines whether the change works — for real, honestly.
 
-Detects an appropriate test command from real project marker files (never
-guesses/fabricates one), requests execution through the tool layer
-(`execute_terminal_command`, backed by the Phase 1.4 Docker sandbox), and
-interprets the actual exit code/stdout/stderr into a structured
-`TestResult`. If no execute-capable tool is available (checked against
-this agent's own actual permissions, not assumed) or no recognized
-project marker is found, it reports `status="unavailable"` honestly
-rather than fabricating a result — there is nothing to interpret when no
-command was actually run.
+Reuses Phase 2.2's `ProjectContext` (already built once by the
+Orchestrator) for framework/test-directory detection instead of
+re-scanning the workspace itself, falling back to the original marker-file
+`list_directory` check only when no `ProjectContext` is available (e.g. a
+`TesterAgent` exercised directly, outside the graph). Prefers a targeted
+test selection (Phase 2.6's `analysis.test_selection`) over the whole
+suite when the changed files/task point at specific tests.
+
+Status is ALWAYS derived deterministically from the real exit code/
+timeout of the actual command that ran — never from an LLM's reading of
+the output. An LLM is not needed for this agent's core correctness at
+all; passed/failed/skipped counts and failing test names are parsed from
+the real stdout/stderr via lightweight, best-effort patterns common
+across pytest/Jest/Mocha/cargo test, not invented.
 """
 
 from __future__ import annotations
 
+import re
+
 from agents.base import BaseAgent
 from agents.schemas import TestResult
 from agents.state import ExecutionState
+from analysis.test_selection import select_test_targets
 
 _TEST_EXECUTION_TOOL_NAMES = ("run_tests", "execute_terminal_command")
 
-_PROJECT_TEST_COMMANDS: tuple[tuple[str, list[str]], ...] = (
-    ("pyproject.toml", ["python", "-m", "pytest"]),
-    ("pytest.ini", ["python", "-m", "pytest"]),
-    ("setup.py", ["python", "-m", "pytest"]),
-    ("package.json", ["npm", "test"]),
-    ("build.gradle", ["./gradlew", "test"]),
-    ("build.gradle.kts", ["./gradlew", "test"]),
+# Fallback marker-file detection, used only when no `ProjectContext` is
+# available at all (e.g. TesterAgent exercised directly in a unit test).
+_PROJECT_TEST_COMMANDS: tuple[tuple[str, str, list[str]], ...] = (
+    ("pyproject.toml", "pytest", ["python", "-m", "pytest"]),
+    ("pytest.ini", "pytest", ["python", "-m", "pytest"]),
+    ("setup.py", "pytest", ["python", "-m", "pytest"]),
+    ("package.json", "npm test", ["npm", "test"]),
+    ("build.gradle", "gradle", ["./gradlew", "test"]),
+    ("build.gradle.kts", "gradle", ["./gradlew", "test"]),
 )
+
+# Base invocation per detected framework. `JUnit` has no single universal
+# command — it depends on the build tool (Maven vs Gradle), resolved from
+# `ProjectContext.package_managers` instead of hardcoded here.
+_FRAMEWORK_COMMANDS: dict[str, list[str]] = {
+    "pytest": ["python", "-m", "pytest"],
+    "unittest": ["python", "-m", "unittest", "discover"],
+    "Jest": ["npx", "jest"],
+    "Vitest": ["npx", "vitest", "run"],
+    "Mocha": ["npx", "mocha"],
+    "Playwright": ["npx", "playwright", "test"],
+    "Cypress": ["npx", "cypress", "run"],
+    "go test": ["go", "test", "./..."],
+    "cargo test": ["cargo", "test"],
+    "CTest": ["ctest"],
+    "flutter test": ["flutter", "test"],
+}
+
+# Frameworks whose CLI accepts specific file/directory paths as extra
+# positional arguments to narrow what runs — go test/cargo test/CTest/
+# JUnit's build-tool invocations don't follow this convention closely
+# enough to target safely without a real toolchain to validate against.
+_PATH_TARGETABLE_FRAMEWORKS = {"pytest", "Jest", "Vitest", "Mocha", "Playwright", "flutter test"}
+
+# Preferred order when a project shows evidence of more than one
+# framework — general unit-test runners before E2E-flavored ones.
+_FRAMEWORK_PRIORITY = [
+    "pytest", "unittest", "Jest", "Vitest", "Mocha", "Playwright", "Cypress",
+    "go test", "cargo test", "CTest", "flutter test", "JUnit",
+]
 
 _DEFAULT_TIMEOUT_SECONDS = 120
 _DEFAULT_MAX_OUTPUT_BYTES = 200_000
 
-_TEST_INTERPRETATION_PROMPT = """You are the Tester for LocoPilot, an autonomous software engineering agent.
-You are given the actual exit code, stdout, and stderr of a real test command execution.
-Summarize it into a structured TestResult. Do not invent results beyond what this output shows."""
+# Best-effort, cross-framework count patterns — pytest/Jest/cargo all use
+# "N passed"/"N failed" somewhere in their default summary; Mocha uses
+# "passing"/"failing"/"pending". Not a claim of parsing every framework's
+# output format correctly.
+_COUNT_PATTERNS = {
+    "passed": re.compile(r"(\d+)\s+(?:passed|passing)\b", re.IGNORECASE),
+    "failed": re.compile(r"(\d+)\s+(?:failed|failing)\b", re.IGNORECASE),
+    "skipped": re.compile(r"(\d+)\s+(?:skipped|pending)\b", re.IGNORECASE),
+}
+_PYTEST_FAILING_TEST = re.compile(r"^FAILED\s+(\S+)", re.MULTILINE)
+_GO_FAILING_TEST = re.compile(r"^---\s+FAIL:\s+(\S+)", re.MULTILINE)
+_MAX_FAILING_TESTS = 20
+
+
+def _parse_counts(output: str) -> tuple[int, int, int]:
+    def _last(pattern: re.Pattern) -> int:
+        matches = pattern.findall(output)
+        return int(matches[-1]) if matches else 0
+
+    return _last(_COUNT_PATTERNS["passed"]), _last(_COUNT_PATTERNS["failed"]), _last(_COUNT_PATTERNS["skipped"])
+
+
+def _parse_failing_tests(output: str) -> list[str]:
+    names = list(dict.fromkeys(_PYTEST_FAILING_TEST.findall(output) + _GO_FAILING_TEST.findall(output)))
+    return names[:_MAX_FAILING_TESTS]
+
+
+_PYTEST_MARKER_FILES = {"pyproject.toml", "pytest.ini", "setup.py"}
+
+
+def _pick_framework(test_frameworks: list[str], config_files: list[str]) -> str | None:
+    # `analysis.detection` falls back to declaring "unittest" whenever
+    # Python test files exist but no framework dependency is declared
+    # (e.g. no pyproject.toml `dependencies` list at all) — a real but
+    # weak signal. A pytest config marker file's mere presence, even with
+    # no explicit "pytest" dependency, is itself much stronger evidence
+    # that pytest (a strict superset of unittest's own test discovery) is
+    # the actually-intended runner, so it takes priority over that guess.
+    if "unittest" in test_frameworks and "pytest" not in test_frameworks and any(
+        f in _PYTEST_MARKER_FILES for f in config_files
+    ):
+        return "pytest"
+    for framework in _FRAMEWORK_PRIORITY:
+        if framework in test_frameworks:
+            return framework
+    return test_frameworks[0] if test_frameworks else None
 
 
 class TesterAgent(BaseAgent):
@@ -49,11 +132,11 @@ class TesterAgent(BaseAgent):
                 "registered for this agent."
             )
 
-        command = await self._detect_test_command()
-        if command is None:
+        framework, command = await self._determine_command(state)
+        if framework is None or command is None:
             return self._unavailable(
-                "Could not determine an appropriate test command: no recognized project "
-                "marker file (pyproject.toml, package.json, ...) was found in the workspace."
+                "Could not determine an appropriate test command: no recognized test framework "
+                "or project marker file was found in the workspace."
             )
 
         result = await self.tools.call(
@@ -71,41 +154,13 @@ class TesterAgent(BaseAgent):
         if result.status != "success" or result.output is None:
             test_result = TestResult(
                 status="error",
+                framework=framework,
                 commands=[command_str],
                 errors=[result.error or "execution tool failed"],
                 summary=f"Failed to execute test command: {result.error or 'unknown error'}",
             )
         else:
-            exit_code = result.output.get("exit_code")
-            timed_out = bool(result.output.get("timed_out", False))
-            stdout = result.output.get("stdout", "")
-            stderr = result.output.get("stderr", "")
-
-            if self.llm_client is not None:
-                test_result = await self.llm_client.generate(
-                    system=_TEST_INTERPRETATION_PROMPT,
-                    user=(
-                        f"Command: {command_str}\nExit code: {exit_code}\nTimed out: {timed_out}\n\n"
-                        f"Stdout:\n{stdout}\n\nStderr:\n{stderr}"
-                    ),
-                    output_model=TestResult,
-                )
-            elif timed_out:
-                test_result = TestResult(
-                    status="error",
-                    commands=[command_str],
-                    errors=["Command timed out before completing."],
-                    summary="Test command timed out.",
-                )
-            else:
-                passed = exit_code == 0
-                tail = (stderr or stdout)[-2000:]
-                test_result = TestResult(
-                    status="passed" if passed else "failed",
-                    commands=[command_str],
-                    errors=[] if passed else [tail or f"exit code {exit_code}"],
-                    summary=f"Command exited {exit_code} (no LLM configured to interpret output further).",
-                )
+            test_result = self._interpret(framework, command_str, result.output)
 
         return {
             "test_results": test_result,
@@ -114,15 +169,95 @@ class TesterAgent(BaseAgent):
             "messages": [f"Tester: {test_result.summary}"],
         }
 
-    async def _detect_test_command(self) -> list[str] | None:
+    def _interpret(self, framework: str, command_str: str, output: dict) -> TestResult:
+        """Status is always derived from the real exit code/timeout —
+        never from a model's reading of the output. Counts and failing
+        test names are parsed from the same real output deterministically."""
+        exit_code = output.get("exit_code")
+        timed_out = bool(output.get("timed_out", False))
+        stdout = output.get("stdout", "")
+        stderr = output.get("stderr", "")
+        duration_ms = output.get("duration_ms")
+        combined = f"{stdout}\n{stderr}"
+
+        if timed_out:
+            return TestResult(
+                status="timed_out",
+                framework=framework,
+                commands=[command_str],
+                duration_ms=duration_ms,
+                errors=["Command timed out before completing."],
+                summary=f"{framework} timed out before completing.",
+            )
+
+        passed, failed, skipped = _parse_counts(combined)
+        failing_tests = _parse_failing_tests(combined)
+        status = "passed" if exit_code == 0 else "failed"
+
+        if passed or failed or skipped:
+            summary = f"{framework}: {passed} passed, {failed} failed, {skipped} skipped (exit code {exit_code})"
+        else:
+            summary = f"{framework} exited {exit_code}"
+
+        tail = (stderr or stdout)[-2000:]
+        return TestResult(
+            status=status,
+            framework=framework,
+            commands=[command_str],
+            passed=passed,
+            failed=failed,
+            skipped=skipped,
+            failing_tests=failing_tests,
+            duration_ms=duration_ms,
+            errors=[] if status == "passed" else [tail or f"exit code {exit_code}"],
+            summary=summary,
+        )
+
+    async def _determine_command(self, state: ExecutionState) -> tuple[str | None, list[str] | None]:
+        project_context = state.project_context
+        if project_context is None or not project_context.test_frameworks:
+            return await self._detect_command_from_markers()
+
+        config_files = project_context.structure.config_files if project_context.structure else []
+        framework = _pick_framework(project_context.test_frameworks, config_files)
+        if framework is None:
+            return None, None
+
+        base_command = self._base_command_for(framework, project_context.package_managers)
+        if base_command is None:
+            return framework, None
+
+        if framework not in _PATH_TARGETABLE_FRAMEWORKS:
+            return framework, base_command
+
+        changed_paths = [f.path for f in state.files_changed if f.change_type != "failed"]
+        targets = select_test_targets(project_context.structure, changed_files=changed_paths, task=state.user_task)
+        if targets:
+            return framework, base_command + targets
+
+        if project_context.test_directories:
+            return framework, base_command + [project_context.test_directories[0]]
+
+        return framework, base_command
+
+    def _base_command_for(self, framework: str, package_managers: list[str]) -> list[str] | None:
+        if framework == "JUnit":
+            if "maven" in package_managers:
+                return ["mvn", "test"]
+            if "gradle" in package_managers:
+                return ["./gradlew", "test"]
+            return None
+        return _FRAMEWORK_COMMANDS.get(framework)
+
+    async def _detect_command_from_markers(self) -> tuple[str | None, list[str] | None]:
         listing = await self.tools.call("list_directory", {"path": "."})
         if listing.status != "success" or not listing.output:
-            return None
+            return None, None
         names = {entry["name"] for entry in listing.output.get("entries", [])}
-        for marker, command in _PROJECT_TEST_COMMANDS:
+        for marker, framework, command in _PROJECT_TEST_COMMANDS:
             if marker in names:
-                return command
-        return None
+                return framework, command
+        return None, None
 
     def _unavailable(self, summary: str) -> dict:
         test_result = TestResult(status="unavailable", commands=[], passed=0, failed=0, errors=[], summary=summary)

@@ -57,7 +57,8 @@ async def test_tester_runs_real_pytest_in_docker_against_passing_fixture(db_sess
 
     test_result = update["test_results"]
     assert test_result.status == "passed"
-    assert "Command exited 0" in test_result.summary
+    assert test_result.framework == "pytest"
+    assert "exit code 0" in test_result.summary
     assert test_result.commands == ["python -m pytest"]
 
     rows = (
