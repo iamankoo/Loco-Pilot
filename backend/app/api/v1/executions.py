@@ -35,6 +35,7 @@ from backend.app.db.repositories.projects import create_project, get_project
 from backend.app.db.repositories.tool_calls import count_tool_calls_for_execution, list_tool_calls_for_execution
 from backend.app.db.session import get_db
 from backend.app.services.execution_detail import elapsed_seconds, synthesize_execution_detail
+from backend.app.services.execution_events import build_execution_events
 from backend.app.services.execution_report import build_execution_report
 from backend.app.services.execution_service import (
     ExecutionServiceError,
@@ -262,6 +263,25 @@ async def get_execution_report_endpoint(
     artifacts = await list_artifacts_for_execution(db, execution_id)
 
     return await build_execution_report(execution=execution, project=project, steps=steps, artifacts=artifacts)
+
+
+@router.get("/{execution_id}/events")
+async def get_execution_events_endpoint(
+    execution_id: uuid.UUID, db: AsyncSession = Depends(get_db)
+) -> dict:
+    """A deterministic, ordered event stream plus execution metrics —
+    reconstructed from persisted AgentStep/ToolCall rows (see
+    `backend.app.services.execution_events`), not a live log tail."""
+    execution = await get_execution(db, execution_id)
+    if execution is None:
+        raise HTTPException(404, "Execution not found.")
+
+    steps = await list_agent_steps_for_execution(db, execution_id)
+    # Bounded by the same execution-wide tool-call budget the graph itself
+    # enforces (`settings.max_total_tool_calls`) — never an unbounded scan.
+    tool_calls = await list_tool_calls_for_execution(db, execution_id, limit=10_000, offset=0)
+
+    return build_execution_events(execution=execution, steps=steps, tool_calls=tool_calls)
 
 
 @router.post("/{execution_id}/cancel", status_code=202, response_model=ExecutionResponse)

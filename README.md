@@ -184,6 +184,23 @@ Next.js dashboard  ──HTTP──>  FastAPI (backend/app)
   of terminal status — a still-running or failed execution gets an honest
   partial report of whatever actually happened so far, not a fabricated
   "success".
+- **Observability** (`backend/app/services/execution_events.py`,
+  `GET /api/v1/executions/{id}/events`): a deterministic, ordered event
+  stream (`execution_started`, `<agent>_started/completed/failed`,
+  `tool_call_completed/failed`, `test_failed`, `retry_started`,
+  `review_changes_requested`, `execution_completed/failed/cancelled`) plus
+  execution metrics (per-agent duration, tool-call counts/failures, test
+  runs, debug/review attempt counts) — reconstructed from the same
+  persisted `AgentStep`/`ToolCall` rows the report reads, not a second
+  logging system (structlog's own live event stream in
+  `backend/app/core/logging.py` is unchanged). `backend/app/core/error_classification.py`
+  gives every failure a stable category (`llm_auth_error`,
+  `llm_quota_error`, `llm_model_access_error`, `workspace_error`,
+  `git_error`, `timeout`, `graph_recursion_limit`, `cancellation`, ...),
+  extending rather than duplicating the LLM-status distinctions
+  `llm_health.py` already draws for the Settings page. Every event carries
+  only bounded fields (tool name, duration, a truncated error) — never a
+  full prompt, tool payload, or stdout/stderr blob.
 - **Persistence** (`backend/app/db/`): SQLAlchemy async models + Alembic
   migrations for projects, executions, agent steps, tool calls, and
   artifacts. Secrets are scrubbed (`backend/app/security/secret_scrubber.py`)
