@@ -110,3 +110,19 @@ class ReviewResult(BaseModel):
     summary: str
     issues: list[str] = Field(default_factory=list)
     regressions_observed: list[str] = Field(default_factory=list)
+    # Phase 2.8 additions — all defaulted so every existing
+    # `ReviewResult(verdict=..., summary=...)` construction site remains
+    # valid unchanged.
+    security_issues: list[str] = Field(default_factory=list)
+    recommendations: list[str] = Field(default_factory=list)
+    # Always overridden by agents.reviewer with a deterministic value
+    # derived from real evidence (security_issues present, or real test
+    # status) rather than trusted from the LLM's own guess — never left
+    # to sound more or less confident than the underlying evidence.
+    risk: Literal["low", "medium", "high"] = "low"
+    files_reviewed: int = 0
+    tests_evaluated: int = 0
+    # How many times the review loop has cycled when this result was
+    # produced (1 = the first review of this change), independent of the
+    # separate debug-retry counter.
+    attempt_number: int = 1

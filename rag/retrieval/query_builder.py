@@ -55,8 +55,8 @@ def _bounded(text: str) -> str:
 
 def build_retrieval_query(agent_name: str, state) -> RetrievalQuery | None:  # noqa: ANN001 - agents.state.ExecutionState (avoids a state<->query_builder import cycle)
     """Returns `None` when this stage has nothing new worth retrieving
-    against (e.g. Tester, or Planner/Reviewer whose stages are covered by
-    the Orchestrator's initial retrieval and Reviewer's own git diff)."""
+    against (e.g. Tester, or Planner whose stage is covered by the
+    Orchestrator's initial retrieval)."""
     project_files = []
     if state.project_context is not None:
         project_files = [r.path for r in state.project_context.relevant_files]
@@ -81,6 +81,14 @@ def build_retrieval_query(agent_name: str, state) -> RetrievalQuery | None:  # n
         # The code Developer just changed is exactly what a failing test
         # is most likely to be exercising.
         hints = list(dict.fromkeys(hints + [f.path for f in state.files_changed]))
+        return RetrievalQuery(text=_bounded("\n".join(parts)), explicit_file_hints=hints[:MAX_EXPLICIT_HINTS])
+
+    if agent_name == "reviewer":
+        parts = [state.user_task]
+        if state.plan is not None:
+            parts.append(state.plan.objective)
+        changed_paths = [f.path for f in state.files_changed if f.change_type != "failed"]
+        hints = list(dict.fromkeys(changed_paths))
         return RetrievalQuery(text=_bounded("\n".join(parts)), explicit_file_hints=hints[:MAX_EXPLICIT_HINTS])
 
     return None

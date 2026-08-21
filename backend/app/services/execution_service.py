@@ -17,7 +17,7 @@ from langgraph.errors import GraphRecursionError
 
 from agents.graph import GraphDependencies, build_graph
 from agents.llm_client import LangChainStructuredLLMClient, StructuredLLMClient, UnavailableLLMClient
-from agents.state import ExecutionState
+from agents.state import ExecutionState, compute_honest_status
 from backend.app.core.config import get_settings
 from backend.app.core.llm.factory import get_llm_provider
 from backend.app.core.logging import bind_execution_context, clear_execution_context, get_logger
@@ -77,24 +77,21 @@ def cancel_execution(execution_id: uuid.UUID) -> None:
     request_cancellation(execution_id)
 
 
+_HONEST_STATUS_TO_DB_STATUS: dict[str, ExecutionStatus] = {
+    "cancelled": ExecutionStatus.CANCELLED,
+    "timed_out": ExecutionStatus.TIMED_OUT,
+    "error": ExecutionStatus.ERROR,
+    "failed": ExecutionStatus.ERROR,
+    "passed": ExecutionStatus.PASSED,
+    "needs_review": ExecutionStatus.NEEDS_REVIEW,
+}
+
+
 def _map_final_status(state: ExecutionState) -> ExecutionStatus:
-    if state.execution_status == "cancelled":
-        return ExecutionStatus.CANCELLED
-    if state.execution_status == "timed_out":
-        return ExecutionStatus.TIMED_OUT
-    if state.execution_status == "error":
-        return ExecutionStatus.ERROR
-    if state.review_result is None:
-        return ExecutionStatus.NEEDS_REVIEW
-    # The graph, not the Reviewer's own judgement, owns whether a run can
-    # be reported as passed: an "approved" verdict is necessary but never
-    # sufficient — if the last real test run didn't actually pass (failed,
-    # errored, or was never run), the execution is not honestly a pass,
-    # regardless of what the model's review concluded.
-    tests_actually_passed = state.test_results is not None and state.test_results.status == "passed"
-    if state.review_result.verdict == "approved" and tests_actually_passed:
-        return ExecutionStatus.PASSED
-    return ExecutionStatus.NEEDS_REVIEW
+    """Delegates to `agents.state.compute_honest_status` — the same
+    function the graph's own finalize node uses — so the graph-level and
+    DB-persisted final status can never disagree with each other."""
+    return _HONEST_STATUS_TO_DB_STATUS.get(compute_honest_status(state), ExecutionStatus.NEEDS_REVIEW)
 
 
 async def run_execution(execution_id: uuid.UUID) -> None:
@@ -142,6 +139,7 @@ async def run_execution(execution_id: uuid.UUID) -> None:
                 embedding_provider=get_embedding_provider(),
                 db=db,
                 max_debug_retries=settings.max_debug_retries,
+                max_review_retries=settings.max_review_retries,
                 max_tool_calls_per_agent=settings.max_tool_calls_per_agent,
                 max_total_tool_calls=settings.max_total_tool_calls,
                 max_context_chars=settings.max_context_chars,

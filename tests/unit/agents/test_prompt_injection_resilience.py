@@ -142,3 +142,39 @@ async def test_reviewer_labels_the_diff_as_untrusted() -> None:
     prompt = llm.calls[0][1]
     assert "UNTRUSTED REPOSITORY CONTEXT" in prompt
     assert MALICIOUS_SNIPPET.strip() in prompt
+
+
+async def test_reviewer_tool_access_is_unaffected_by_malicious_diff_content() -> None:
+    """Even though the malicious diff literally asks the model to delete
+    everything, Reviewer's own permission set (read-only) is a structural
+    fact of the BoundToolRunner it was constructed with — nothing about
+    the diff's content can add a tool to that set."""
+    llm = FakeStructuredLLMClient({"ReviewResult": ReviewResult(verdict="approved", summary="fine")})
+    tools = FakeToolRunner(
+        allowed={"git_diff"},
+        responses={
+            "git_diff": ToolExecutionResult(
+                tool_name="git_diff", status="success", output={"diff": MALICIOUS_SNIPPET}, error=None, duration_ms=1
+            )
+        },
+    )
+    agent = ReviewerAgent(llm_client=llm, tools=tools)
+
+    await agent.run(_state_with_malicious_context())
+
+    assert tools.available_tools() == {"git_diff"}
+    for mutating_tool in ("write_file", "edit_file", "delete_file", "move_file", "execute_terminal_command"):
+        assert mutating_tool not in tools.available_tools()
+
+
+async def test_reviewer_permission_set_structurally_excludes_every_mutating_tool() -> None:
+    """REVIEWER_PERMISSIONS itself (independent of any prompt content)
+    never resolves to a mutating tool through the real registry."""
+    from agents.permissions import REVIEWER_PERMISSIONS
+    from tools.registry import build_default_registry
+
+    names = {t.name for t in build_default_registry().list_tools(permissions=REVIEWER_PERMISSIONS)}
+    for mutating_tool in ("write_file", "edit_file", "delete_file", "move_file", "execute_terminal_command"):
+        assert mutating_tool not in names
+    assert "git_diff" in names
+    assert "read_file" in names

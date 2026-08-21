@@ -4,7 +4,7 @@ import pytest
 
 from agents.llm_client import LLMUnavailableError
 from agents.reviewer import ReviewerAgent
-from agents.schemas import ReviewResult, TestResult
+from agents.schemas import FileChange, ReviewResult, TestResult
 from agents.state import ExecutionState
 from tests.fakes import FakeStructuredLLMClient, FakeToolRunner
 from tools.execution_result import ToolExecutionResult
@@ -46,22 +46,80 @@ async def test_reviewer_calls_real_git_diff_tool() -> None:
     assert "+added_line" in user_prompt
 
 
-async def test_reviewer_approved_maps_to_passed_status() -> None:
+async def test_reviewer_approved_with_passing_tests_maps_to_passed_status() -> None:
+    review = ReviewResult(verdict="approved", summary="good")
+    llm = FakeStructuredLLMClient({"ReviewResult": review})
+    agent = ReviewerAgent(llm_client=llm, tools=FakeToolRunner(allowed={"git_diff"}))
+
+    state = _state().model_copy(update={"test_results": TestResult(status="passed", summary="3 passed")})
+    update = await agent.run(state)
+    assert update["execution_status"] == "passed"
+
+
+async def test_reviewer_approved_without_passing_tests_does_not_report_passed() -> None:
+    """Phase 2.8: an "approved" verdict alone is never sufficient — the
+    default `_state()` fixture's test_results.status is "unavailable"."""
     review = ReviewResult(verdict="approved", summary="good")
     llm = FakeStructuredLLMClient({"ReviewResult": review})
     agent = ReviewerAgent(llm_client=llm, tools=FakeToolRunner(allowed={"git_diff"}))
 
     update = await agent.run(_state())
-    assert update["execution_status"] == "passed"
+    assert update["execution_status"] == "needs_review"
+    assert update["execution_status"] != "passed"
 
 
-async def test_reviewer_changes_required_maps_to_failed_status() -> None:
+async def test_reviewer_changes_required_routes_back_to_developer() -> None:
     review = ReviewResult(verdict="changes_required", summary="missing edge case", issues=["no null check"])
     llm = FakeStructuredLLMClient({"ReviewResult": review})
     agent = ReviewerAgent(llm_client=llm, tools=FakeToolRunner(allowed={"git_diff"}))
 
     update = await agent.run(_state())
-    assert update["execution_status"] == "failed"
+    assert update["execution_status"] == "developing"
+    assert update["review_retry_count"] == 1
+    assert update["review_result"] in update["review_attempts"]
+
+
+async def test_reviewer_computes_files_reviewed_and_tests_evaluated_deterministically() -> None:
+    review = ReviewResult(verdict="approved", summary="good")
+    llm = FakeStructuredLLMClient({"ReviewResult": review})
+    agent = ReviewerAgent(llm_client=llm, tools=FakeToolRunner(allowed={"git_diff"}))
+
+    state = _state().model_copy(
+        update={
+            "test_results": TestResult(status="passed", summary="ok", passed=3, failed=1, skipped=2),
+            "files_changed": [
+                FileChange(path="a.py", change_type="modified", detail="x"),
+                FileChange(path="b.py", change_type="created", detail="x"),
+                FileChange(path="c.py", change_type="failed", detail="x"),
+            ],
+        }
+    )
+    update = await agent.run(state)
+
+    assert update["review_result"].files_reviewed == 2  # the failed tool call isn't a real change
+    assert update["review_result"].tests_evaluated == 6  # 3 + 1 + 2
+
+
+async def test_reviewer_risk_never_reads_calmer_than_the_deterministic_floor() -> None:
+    """The LLM under-calls risk ("low") despite listing a security issue —
+    the deterministic floor must win."""
+    review = ReviewResult(verdict="changes_required", summary="bad", security_issues=["hardcoded secret"], risk="low")
+    llm = FakeStructuredLLMClient({"ReviewResult": review})
+    agent = ReviewerAgent(llm_client=llm, tools=FakeToolRunner(allowed={"git_diff"}))
+
+    update = await agent.run(_state())
+    assert update["review_result"].risk == "high"
+
+
+async def test_reviewer_risk_is_not_lowered_when_llm_reports_higher_than_the_floor() -> None:
+    """The deterministic floor is a floor, not a ceiling — a genuinely
+    higher LLM-assessed risk is preserved even with no deterministic signal."""
+    review = ReviewResult(verdict="changes_required", summary="bad", risk="high")
+    llm = FakeStructuredLLMClient({"ReviewResult": review})
+    agent = ReviewerAgent(llm_client=llm, tools=FakeToolRunner(allowed={"git_diff"}))
+
+    update = await agent.run(_state())
+    assert update["review_result"].risk == "high"
 
 
 async def test_reviewer_never_calls_a_write_tool() -> None:

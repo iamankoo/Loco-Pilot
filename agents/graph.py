@@ -36,7 +36,7 @@ from agents.permissions import (
 )
 from agents.planner import PlannerAgent
 from agents.reviewer import ReviewerAgent
-from agents.state import ExecutionState
+from agents.state import ExecutionState, compute_honest_status
 from agents.tester import TesterAgent
 from analysis.context import build_project_context
 from analysis.scanner import ScanLimits
@@ -66,7 +66,7 @@ _DEBUGGER_TOOL_NAMES = {"read_file", "search_files", "list_directory", "file_exi
 # Which agent roles benefit from a stage-specific RAG re-retrieval beyond
 # the Orchestrator's initial task-based retrieval (Planner already
 # consumes that one).
-_TOOL_LOOP_AGENTS = {"developer", "debugger"}
+_STAGE_RETRIEVAL_AGENTS = {"developer", "debugger", "reviewer"}
 
 
 @dataclass
@@ -76,6 +76,10 @@ class GraphDependencies:
     embedding_provider: EmbeddingProvider
     db: AsyncSession | None = None
     max_debug_retries: int = 2
+    # Bounds the Reviewer -> Developer -> Tester -> Reviewer loop
+    # (Phase 2.8), independent of `max_debug_retries` — a "changes
+    # requested" verdict is a different kind of retry than a test failure.
+    max_review_retries: int = 2
     retrieval_top_k: int = 8
     max_tool_calls_per_agent: int = 12
     max_total_tool_calls: int = 60
@@ -200,7 +204,7 @@ def make_agent_node(
             )
 
         run_state = state
-        if agent_cls.name in _TOOL_LOOP_AGENTS:
+        if agent_cls.name in _STAGE_RETRIEVAL_AGENTS:
             fresh_context = await _retrieve_stage_context(agent_cls.name, state, deps)
             if fresh_context is not None:
                 run_state = state.model_copy(update={"repository_context": fresh_context})
@@ -321,9 +325,7 @@ def make_orchestrator_node(deps: GraphDependencies) -> Callable[[ExecutionState]
 
 def make_finalize_node(deps: GraphDependencies) -> Callable[[ExecutionState], "object"]:
     async def node(state: ExecutionState) -> dict:
-        final_status = state.execution_status
-        if final_status not in ("passed", "failed", "error", "cancelled", "timed_out"):
-            final_status = "failed"
+        final_status = compute_honest_status(state)
 
         artifact_count = 0
         if (
@@ -384,6 +386,18 @@ def route_after_debugger(state: ExecutionState) -> str:
     return "finalize" if state.execution_status in ("error", "cancelled") else "developer"
 
 
+def route_after_reviewer(state: ExecutionState, max_review_retries: int) -> str:
+    if state.execution_status in ("error", "cancelled"):
+        return "finalize"
+    if (
+        state.review_result is not None
+        and state.review_result.verdict == "changes_required"
+        and state.review_retry_count < max_review_retries
+    ):
+        return "developer"
+    return "finalize"
+
+
 def build_graph(deps: GraphDependencies):
     graph = StateGraph(ExecutionState)
 
@@ -405,7 +419,11 @@ def build_graph(deps: GraphDependencies):
         {"debugger": "debugger", "reviewer": "reviewer", "finalize": "finalize"},
     )
     graph.add_conditional_edges("debugger", route_after_debugger, {"developer": "developer", "finalize": "finalize"})
-    graph.add_edge("reviewer", "finalize")
+    graph.add_conditional_edges(
+        "reviewer",
+        lambda state: route_after_reviewer(state, deps.max_review_retries),
+        {"developer": "developer", "finalize": "finalize"},
+    )
     graph.add_edge("finalize", END)
 
     return graph.compile()

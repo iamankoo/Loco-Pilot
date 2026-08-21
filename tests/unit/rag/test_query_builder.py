@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from agents.schemas import DebugResult, Plan, TestResult
+from agents.schemas import DebugResult, FileChange, Plan, TestResult
 from agents.state import ExecutionState
 from rag.retrieval.query_builder import build_retrieval_query
 
@@ -87,5 +87,17 @@ def test_query_text_is_bounded() -> None:
 
 
 def test_unknown_stage_returns_none() -> None:
-    assert build_retrieval_query("reviewer", _state()) is None
     assert build_retrieval_query("tester", _state()) is None
+    assert build_retrieval_query("some_unknown_stage", _state()) is None
+
+
+def test_reviewer_query_includes_task_and_changed_files() -> None:
+    plan = Plan(objective="fix login", steps=["a"], testing_strategy="t")
+    state = _state(
+        plan=plan,
+        files_changed=[FileChange(path="auth.py", change_type="modified", detail="edited")],
+    )
+    query = build_retrieval_query("reviewer", state)
+    assert query is not None
+    assert "fix login" in query.text
+    assert "auth.py" in query.explicit_file_hints

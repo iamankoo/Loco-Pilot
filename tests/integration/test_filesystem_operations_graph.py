@@ -94,4 +94,6 @@ async def test_developer_performs_a_realistic_file_operation_lifecycle_and_revie
     assert final["review_result"] is not None
     assert final["review_result"].verdict == "approved"
 
-    assert final["execution_status"] == "passed"
+    # Phase 2.8: no real test command is available in this fixture, so an
+    # "approved" verdict alone honestly maps to "needs_review", not "passed".
+    assert final["execution_status"] == "needs_review"

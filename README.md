@@ -141,6 +141,23 @@ Next.js dashboard  ──HTTP──>  FastAPI (backend/app)
   `MAX_DEBUG_RETRIES` remains the sole termination authority (unchanged
   from Phase 2.1) — attempt history is additional context and
   observability, not a second loop-control mechanism.
+- **Reviewer** (`agents/reviewer.py`): an independent gate, not a rubber
+  stamp — reads the real git diff, the real `files_changed`, real test
+  results, and the debug-attempt history, and detects several things
+  deterministically before the LLM ever weighs in: files changed outside
+  the plan's own stated scope, a deleted test file, and a diff pattern
+  that looks like a real assertion was replaced with a trivial
+  `assert True`. Any of these forces a `risk` floor ("medium"/"high")
+  that an LLM's own (lower) assessment can never undercut — `risk` is the
+  max of the two, never just the model's guess. A "changes_required"
+  verdict now genuinely routes back to Developer -> Tester -> Reviewer,
+  bounded by its own `MAX_REVIEW_RETRIES` counter (independent of the
+  debug loop's). Whether an execution can honestly be reported "passed" —
+  an approved review is necessary but never sufficient without a real
+  passing test result — is decided by one function,
+  `agents.state.compute_honest_status`, used identically by the graph's
+  own finalize node and the service layer's DB-status mapping, so the
+  two can never disagree with each other.
 - **Persistence** (`backend/app/db/`): SQLAlchemy async models + Alembic
   migrations for projects, executions, agent steps, tool calls, and
   artifacts. Secrets are scrubbed (`backend/app/security/secret_scrubber.py`)

@@ -60,9 +60,13 @@ async def test_graph_happy_path_reaches_reviewer_and_persists_agent_steps(
     )
     final = await graph.ainvoke(initial_state)
 
-    assert final["execution_status"] == "passed"
+    # Phase 2.8: an "approved" verdict alone is never enough to report
+    # "passed" — this minimal fixture has no real test command available
+    # (test_results.status == "unavailable"), so the honest outcome is
+    # "needs_review", not a fabricated pass.
+    assert final["execution_status"] == "needs_review"
     assert final["review_result"].verdict == "approved"
-    assert final["final_result"]["status"] == "passed"
+    assert final["final_result"]["status"] == "needs_review"
     assert (tmp_git_workspace.root / "hello.txt").exists()
 
     steps = (

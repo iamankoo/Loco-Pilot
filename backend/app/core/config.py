@@ -63,6 +63,10 @@ class Settings(BaseSettings):
 
     # ---- Agent execution ----
     max_debug_retries: int = 2
+    # Bounds the Reviewer -> Developer -> Tester -> Reviewer loop (Phase
+    # 2.8), independent of max_debug_retries — a "changes requested"
+    # verdict is a different kind of retry than a test failure.
+    max_review_retries: int = 2
     # Bounds on the LLM-driven tool-calling loop (Developer/Debugger): how
     # many tool calls one agent turn may make, how many an entire execution
     # may make in total across every agent turn, and a hard wall-clock cap
