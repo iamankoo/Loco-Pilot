@@ -182,6 +182,19 @@ Next.js dashboard  ──HTTP──>  FastAPI (backend/app)
   `LOCOPILOT_WORKSPACE_ROOT` (default: a platform-appropriate application-data
   directory — never a path inside the repository, never a hardcoded personal
   path), structured as `projects/`, `uploads/`, `executions/`, `artifacts/`.
+- **Execution isolation** (`backend/app/services/execution_workspace.py`,
+  `execution_locks.py`): every execution gets its own traceable directory
+  under `executions/<execution_id>/` with a lifecycle marker
+  (created → active → completed/failed/cancelled) — one execution's files
+  there are never visible to another's. This is deliberately *not* a full
+  duplicate of the project: Developer's tools still edit the project's real
+  `workspace_path` directly, since that is the point of the product, so a
+  second, in-process lock instead serializes concurrent executions against
+  the *same* project (different projects always run fully concurrently),
+  preventing two executions from racing writes on the one shared workspace.
+  This sits alongside, not in place of, the Docker sandbox's own per-command
+  container isolation (non-root, read-only root fs, dropped capabilities,
+  resource limits, no network by default).
 - **Frontend** (`frontend/`): Next.js (App Router) + TypeScript + Tailwind,
   polling the read API for live updates (no WebSocket/SSE — deliberately the
   simplest reliable mechanism for this scale).

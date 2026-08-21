@@ -27,6 +27,11 @@ from backend.app.db.repositories.executions import create_execution, get_executi
 from backend.app.db.repositories.projects import get_project
 from backend.app.db.session import get_session_factory
 from backend.app.services.cancellation import clear_cancellation, request_cancellation
+from backend.app.services.execution_locks import get_project_execution_lock
+from backend.app.services.execution_workspace import (
+    create_execution_workspace,
+    mark_execution_workspace_status,
+)
 from rag.embeddings.factory import get_embedding_provider
 from tools.registry import build_default_registry
 from tools.workspace import Workspace, WorkspaceError
@@ -130,75 +135,93 @@ async def run_execution(execution_id: uuid.UUID) -> None:
                 )
                 return
 
-            await update_execution_status(db, execution_id, status=ExecutionStatus.RUNNING, mark_started=True)
+            # Phase 2.10: a per-execution, traceable workspace directory
+            # (independent of the project's own shared files — see
+            # execution_workspace.py) plus a per-project lock, so a second
+            # execution against this same project can never race this
+            # one's tool calls on the shared workspace. Two different
+            # projects are never serialized against each other.
+            create_execution_workspace(str(execution_id), project_id=str(project.id))
+            async with get_project_execution_lock(project.id):
+                mark_execution_workspace_status(str(execution_id), "active")
+                await update_execution_status(db, execution_id, status=ExecutionStatus.RUNNING, mark_started=True)
 
-            settings = get_settings()
-            deps = GraphDependencies(
-                registry=build_default_registry(),
-                llm_client=_build_llm_client(),
-                embedding_provider=get_embedding_provider(),
-                db=db,
-                max_debug_retries=settings.max_debug_retries,
-                max_review_retries=settings.max_review_retries,
-                max_tool_calls_per_agent=settings.max_tool_calls_per_agent,
-                max_total_tool_calls=settings.max_total_tool_calls,
-                max_context_chars=settings.max_context_chars,
-                max_agent_turns=settings.max_agent_turns,
-                workspace_scan_max_files=settings.workspace_scan_max_files,
-                workspace_scan_max_depth=settings.workspace_scan_max_depth,
-            )
-            graph = build_graph(deps)
-
-            initial_state = ExecutionState(
-                execution_id=str(execution_id),
-                project_id=str(project.id),
-                user_task=execution.task,
-                workspace_root=str(workspace.root),
-            )
-
-            try:
-                final_state_dict = await asyncio.wait_for(
-                    graph.ainvoke(initial_state, config={"recursion_limit": settings.max_agent_turns}),
-                    timeout=settings.max_execution_seconds,
+                settings = get_settings()
+                deps = GraphDependencies(
+                    registry=build_default_registry(),
+                    llm_client=_build_llm_client(),
+                    embedding_provider=get_embedding_provider(),
+                    db=db,
+                    max_debug_retries=settings.max_debug_retries,
+                    max_review_retries=settings.max_review_retries,
+                    max_tool_calls_per_agent=settings.max_tool_calls_per_agent,
+                    max_total_tool_calls=settings.max_total_tool_calls,
+                    max_context_chars=settings.max_context_chars,
+                    max_agent_turns=settings.max_agent_turns,
+                    workspace_scan_max_files=settings.workspace_scan_max_files,
+                    workspace_scan_max_depth=settings.workspace_scan_max_depth,
                 )
-                final_state = ExecutionState.model_validate(final_state_dict)
-            except asyncio.TimeoutError:
-                logger.warning("execution_timed_out", timeout_seconds=settings.max_execution_seconds)
+                graph = build_graph(deps)
+
+                initial_state = ExecutionState(
+                    execution_id=str(execution_id),
+                    project_id=str(project.id),
+                    user_task=execution.task,
+                    workspace_root=str(workspace.root),
+                )
+
+                try:
+                    final_state_dict = await asyncio.wait_for(
+                        graph.ainvoke(initial_state, config={"recursion_limit": settings.max_agent_turns}),
+                        timeout=settings.max_execution_seconds,
+                    )
+                    final_state = ExecutionState.model_validate(final_state_dict)
+                except asyncio.TimeoutError:
+                    logger.warning("execution_timed_out", timeout_seconds=settings.max_execution_seconds)
+                    mark_execution_workspace_status(str(execution_id), "failed")
+                    await update_execution_status(
+                        db,
+                        execution_id,
+                        status=ExecutionStatus.TIMED_OUT,
+                        error_message=f"Execution exceeded the {settings.max_execution_seconds}s time limit.",
+                        mark_completed=True,
+                    )
+                    return
+                except GraphRecursionError:
+                    # The outer safety net beneath MAX_DEBUG_RETRIES: should not
+                    # normally trigger (retry-budget routing already terminates
+                    # the debug loop deterministically), but a routing bug or an
+                    # unexpected state must still end in an honest, bounded
+                    # failure rather than genuinely running away.
+                    logger.warning("execution_exceeded_max_agent_turns", max_agent_turns=settings.max_agent_turns)
+                    mark_execution_workspace_status(str(execution_id), "failed")
+                    await update_execution_status(
+                        db,
+                        execution_id,
+                        status=ExecutionStatus.ERROR,
+                        error_message=f"Execution exceeded the maximum of {settings.max_agent_turns} agent turns.",
+                        mark_completed=True,
+                    )
+                    return
+                except Exception as exc:  # noqa: BLE001 - a hard graph failure must still leave a clean execution record
+                    logger.exception("graph_execution_failed")
+                    mark_execution_workspace_status(str(execution_id), "failed")
+                    await update_execution_status(
+                        db, execution_id, status=ExecutionStatus.ERROR, error_message=str(exc), mark_completed=True
+                    )
+                    return
+
+                status = _map_final_status(final_state)
+                error_message = final_state.errors[-1] if status == ExecutionStatus.ERROR and final_state.errors else None
+                mark_execution_workspace_status(
+                    str(execution_id),
+                    "cancelled" if status == ExecutionStatus.CANCELLED else
+                    "failed" if status in (ExecutionStatus.ERROR, ExecutionStatus.TIMED_OUT) else
+                    "completed",
+                )
                 await update_execution_status(
-                    db,
-                    execution_id,
-                    status=ExecutionStatus.TIMED_OUT,
-                    error_message=f"Execution exceeded the {settings.max_execution_seconds}s time limit.",
-                    mark_completed=True,
+                    db, execution_id, status=status, error_message=error_message, mark_completed=True
                 )
-                return
-            except GraphRecursionError:
-                # The outer safety net beneath MAX_DEBUG_RETRIES: should not
-                # normally trigger (retry-budget routing already terminates
-                # the debug loop deterministically), but a routing bug or an
-                # unexpected state must still end in an honest, bounded
-                # failure rather than genuinely running away.
-                logger.warning("execution_exceeded_max_agent_turns", max_agent_turns=settings.max_agent_turns)
-                await update_execution_status(
-                    db,
-                    execution_id,
-                    status=ExecutionStatus.ERROR,
-                    error_message=f"Execution exceeded the maximum of {settings.max_agent_turns} agent turns.",
-                    mark_completed=True,
-                )
-                return
-            except Exception as exc:  # noqa: BLE001 - a hard graph failure must still leave a clean execution record
-                logger.exception("graph_execution_failed")
-                await update_execution_status(
-                    db, execution_id, status=ExecutionStatus.ERROR, error_message=str(exc), mark_completed=True
-                )
-                return
-
-            status = _map_final_status(final_state)
-            error_message = final_state.errors[-1] if status == ExecutionStatus.ERROR and final_state.errors else None
-            await update_execution_status(
-                db, execution_id, status=status, error_message=error_message, mark_completed=True
-            )
     finally:
         clear_cancellation(execution_id)
         clear_execution_context()
