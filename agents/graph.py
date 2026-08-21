@@ -38,6 +38,8 @@ from agents.planner import PlannerAgent
 from agents.reviewer import ReviewerAgent
 from agents.state import ExecutionState
 from agents.tester import TesterAgent
+from analysis.context import build_project_context
+from analysis.scanner import ScanLimits
 from backend.app.core.logging import bind_execution_context, get_logger
 from backend.app.db.models.agent_step import AgentStepStatus
 from backend.app.db.repositories.agent_steps import complete_agent_step, create_agent_step
@@ -84,6 +86,10 @@ class GraphDependencies:
     # autonomy settings so one `GraphDependencies` instance fully describes
     # an execution's limits.
     max_agent_turns: int = 50
+    # Bounds on the Orchestrator's one-time repository structure scan (see
+    # `analysis.scanner.ScanLimits`); None uses that module's own defaults.
+    workspace_scan_max_files: int | None = None
+    workspace_scan_max_depth: int | None = None
 
 
 def _summarize(value: object) -> object:
@@ -254,6 +260,7 @@ def make_orchestrator_node(deps: GraphDependencies) -> Callable[[ExecutionState]
             }
 
         repository_context = None
+        retrieved_chunk_paths: list[tuple[str, float]] = []
         if deps.db is not None:
             try:
                 retriever = Retriever(deps.embedding_provider)
@@ -264,8 +271,28 @@ def make_orchestrator_node(deps: GraphDependencies) -> Callable[[ExecutionState]
                     top_k=deps.retrieval_top_k,
                 )
                 repository_context = build_context(chunks, max_chars=deps.max_context_chars)
+                retrieved_chunk_paths = [(c.file_path, c.score) for c in chunks]
             except Exception as exc:  # noqa: BLE001 - retrieval failure must not abort the whole execution
                 logger.warning("retrieval_failed", error=str(exc))
+
+        project_context = None
+        try:
+            workspace = Workspace.at(state.workspace_root)
+            scan_limits = None
+            if deps.workspace_scan_max_files is not None or deps.workspace_scan_max_depth is not None:
+                defaults = ScanLimits()
+                scan_limits = ScanLimits(
+                    max_files=deps.workspace_scan_max_files or defaults.max_files,
+                    max_depth=deps.workspace_scan_max_depth or defaults.max_depth,
+                )
+            project_context = await build_project_context(
+                workspace,
+                state.user_task,
+                scan_limits=scan_limits,
+                retrieved_chunk_paths=retrieved_chunk_paths,
+            )
+        except Exception as exc:  # noqa: BLE001 - workspace intelligence failure must not abort the whole execution
+            logger.warning("workspace_discovery_failed", error=str(exc))
 
         trace = "Orchestrator: execution initialized"
         trace += (
@@ -273,9 +300,15 @@ def make_orchestrator_node(deps: GraphDependencies) -> Callable[[ExecutionState]
             if repository_context is not None
             else "; no repository context retrieved."
         )
+        if project_context is not None:
+            trace += (
+                f" Detected {', '.join(project_context.languages) or 'no recognized language'}"
+                f"{' (' + ', '.join(project_context.frameworks) + ')' if project_context.frameworks else ''}."
+            )
 
         return {
             "repository_context": repository_context,
+            "project_context": project_context,
             "current_agent": "orchestrator",
             "execution_status": "planning",
             "messages": [trace],

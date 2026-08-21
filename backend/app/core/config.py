@@ -80,6 +80,13 @@ class Settings(BaseSettings):
     # Character budget for RAG context handed to any single agent prompt.
     max_context_chars: int = 12_000
 
+    # ---- Workspace intelligence (Phase 2.2) ----
+    # Bounds on the Orchestrator's one-time repository structure scan
+    # (`analysis.scanner.scan_repository`) — a large or deeply nested
+    # workspace must never turn understanding it into an unbounded walk.
+    workspace_scan_max_files: int = 2_000
+    workspace_scan_max_depth: int = 8
+
     # ---- Logging ----
     log_level: str = "INFO"
     log_format: Literal["console", "json"] = "console"

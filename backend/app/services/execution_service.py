@@ -146,6 +146,8 @@ async def run_execution(execution_id: uuid.UUID) -> None:
                 max_total_tool_calls=settings.max_total_tool_calls,
                 max_context_chars=settings.max_context_chars,
                 max_agent_turns=settings.max_agent_turns,
+                workspace_scan_max_files=settings.workspace_scan_max_files,
+                workspace_scan_max_depth=settings.workspace_scan_max_depth,
             )
             graph = build_graph(deps)
 

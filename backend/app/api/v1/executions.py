@@ -41,8 +41,7 @@ from backend.app.services.execution_service import (
     create_and_run_execution,
     run_execution,
 )
-from backend.app.services.workspace_provisioning import provision_default_workspace
-from tools.workspace import Workspace, WorkspaceError
+from backend.app.services.workspace_discovery import discover_or_provision_workspace
 
 router = APIRouter(prefix="/executions", tags=["executions"])
 
@@ -74,27 +73,25 @@ async def create_execution_endpoint(
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
 ) -> ExecutionResponse:
-    project_id = payload.project_id
+    discovery = await discover_or_provision_workspace(
+        db,
+        task=payload.task,
+        project_id=payload.project_id,
+        workspace_path=payload.workspace_path,
+        project_name=payload.project_name,
+    )
+    if discovery.outcome == "invalid":
+        raise HTTPException(422, discovery.reason)
+    if discovery.outcome == "not_found":
+        raise HTTPException(404, discovery.reason)
 
-    if project_id is None:
-        workspace_path = payload.workspace_path
-        project_name = payload.project_name
-        if not workspace_path:
-            # No project and no workspace given: fall back to the default
-            # LocoPilot Storage location instead of rejecting the request.
-            project_name, workspace_path = provision_default_workspace(
-                seed_text=payload.task, project_name=payload.project_name
-            )
-        try:
-            Workspace.at(workspace_path)
-        except WorkspaceError as exc:
-            raise HTTPException(422, f"Invalid workspace_path: {exc}") from exc
-        project = await create_project(db, name=project_name or workspace_path, workspace_path=workspace_path)
-        project_id = project.id
+    if discovery.project_id is not None:
+        project_id = discovery.project_id
     else:
-        project = await get_project(db, project_id)
-        if project is None:
-            raise HTTPException(404, "Project not found.")
+        project = await create_project(
+            db, name=discovery.project_name or discovery.workspace_path, workspace_path=discovery.workspace_path
+        )
+        project_id = project.id
 
     try:
         execution = await create_and_run_execution(db, project_id=project_id, task=payload.task)

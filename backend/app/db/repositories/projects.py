@@ -8,6 +8,29 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.app.db.models.project import Project
 
 
+async def find_project_by_name(db: AsyncSession, name: str) -> Project | None:
+    """Case-insensitive lookup used by workspace discovery to find an
+    already-registered project by name before ever provisioning a new
+    directory — an exact match wins; otherwise the most recently created
+    project whose name contains (or is contained by) the query."""
+    normalized = name.strip().lower()
+    if not normalized:
+        return None
+
+    exact = await db.execute(select(Project).where(func.lower(Project.name) == normalized))
+    match = exact.scalars().first()
+    if match is not None:
+        return match
+
+    stmt = select(Project).order_by(Project.created_at.desc())
+    result = await db.execute(stmt)
+    for project in result.scalars().all():
+        lowered = project.name.strip().lower()
+        if normalized in lowered or lowered in normalized:
+            return project
+    return None
+
+
 async def create_project(
     db: AsyncSession,
     *,

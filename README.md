@@ -60,10 +60,10 @@ Next.js dashboard  ──HTTP──>  FastAPI (backend/app)
                             LangGraph (agents/graph.py)
                                   │
    Orchestrator ─▶ Planner ─▶ Developer ─▶ Tester ─▶ Debugger ─▶ Reviewer
-                                  │             │         │
-                                  ▼             ▼         ▼
-                          Tool Registry   Docker Sandbox  RAG (pgvector)
-                       (filesystem/git/terminal, permission-checked)
+        │                         │             │         │
+        ▼                         ▼             ▼         ▼
+   analysis/ (workspace     Tool Registry   Docker Sandbox  RAG (pgvector)
+   intelligence, once)   (filesystem/git/terminal, permission-checked)
                                   │
                          PostgreSQL (executions, steps, tool calls,
                                      artifacts, repository_chunks)
@@ -74,6 +74,25 @@ Next.js dashboard  ──HTTP──>  FastAPI (backend/app)
 - **Agents** (`agents/`): shared `AgentState`, a `BaseAgent`, and the five
   pipeline agents. Developer/Debugger use a bounded tool-calling loop
   (`agents/llm_client.py`); every agent turn persists an `AgentStep`.
+- **Workspace intelligence** (`analysis/`): before Planner ever runs, the
+  Orchestrator builds a deterministic `ProjectContext` — a bounded,
+  structured repository scan (directories/files/tests/config, excluding
+  `.git`/`node_modules`/`.venv`/build output, capped file count and depth),
+  language/framework/test-framework detection from real dependency-manifest
+  evidence (never a filename guess), parsed dependency summaries, git
+  awareness (branch/status), and task-relevant file discovery combining
+  filename/keyword matching with RAG retrieval. None of it is LLM-driven;
+  Planner only ever interprets the result. A failure in any one stage is
+  recorded as a warning and the run continues with an explicitly
+  `incomplete` context rather than fabricating an understanding.
+- **Workspace discovery** (`backend/app/services/workspace_discovery.py`):
+  resolves which project an execution targets — an explicit `project_id`/
+  `workspace_path` is used as-is; a `project_name` (or a name mentioned in
+  the task, e.g. "...in DeepLens") is matched against existing projects
+  first; only a task that clearly asks to create something ("Create a C++
+  calculator") provisions a brand-new workspace when no match exists — a
+  read/fix/check task naming a project that doesn't exist honestly reports
+  "not found" instead of silently creating an empty directory.
 - **Tools** (`tools/`): filesystem, git, and terminal tools, each declared
   with a Pydantic input/output schema and a required `Permission`. Every
   path is resolved through `tools/workspace.py`'s `Workspace`, which rejects

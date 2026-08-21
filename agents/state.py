@@ -15,6 +15,7 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, Field
 
 from agents.schemas import DebugResult, FileChange, Plan, ReviewResult, TestResult
+from analysis.context import ProjectContext
 from rag.retrieval.context_builder import RepositoryContext
 
 ExecutionStatusLiteral = Literal[
@@ -46,6 +47,11 @@ class ExecutionState(BaseModel):
     workspace_root: str
 
     repository_context: RepositoryContext | None = None
+    # Deterministic workspace/repository intelligence built once by the
+    # Orchestrator (see `analysis.context.build_project_context`) — the
+    # Planner reads this instead of relying on the LLM to "just know" the
+    # repository. Never mutated after the Orchestrator's turn.
+    project_context: ProjectContext | None = None
     plan: Plan | None = None
     current_agent: str | None = None
 
