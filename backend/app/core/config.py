@@ -45,11 +45,16 @@ class Settings(BaseSettings):
     llm_model: str = "nvidia/nemotron-3-ultra-550b-a55b"
     llm_api_key: str | None = None
     llm_temperature: float = 0.2
-    # 90s (not the more common 60s) because the default provider, NVIDIA's
-    # hosted Nemotron Ultra (550B), routinely takes 25-40s for a single
-    # response even when healthy — a 60s timeout was observed failing
-    # mid-conversation in the Developer tool-calling loop.
-    llm_request_timeout: int = 90
+    # 180s (not the more common 60s) because the default provider, NVIDIA's
+    # hosted Nemotron Ultra (550B), measured 20-35s for even a trivial
+    # single-token reply, plus a further 13-21s to report itself overloaded
+    # (503) — well before Developer's tool-calling loop adds its own
+    # per-turn context growth. A 60s timeout was observed failing mid-loop;
+    # a 90s timeout was observed failing on the same task once turn 4+
+    # carried the accumulated tool-call history. Tool outputs themselves
+    # are already bounded (tools/filesystem/limits.py, terminal max_output_bytes)
+    # — this is provider-side latency, not runaway context.
+    llm_request_timeout: int = 180
 
     # ---- Embedding provider ----
     # "hashing" (default) is a free, local, deterministic embedding used so

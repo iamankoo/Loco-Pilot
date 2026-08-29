@@ -18,13 +18,25 @@ full conversation. An unauthorized or unknown tool name is never silently
 dropped: the resulting error is fed back to the LLM as a tool result, so
 it can recover (e.g. by asking for a permitted tool instead) within the
 same bounded loop.
+
+Every individual LLM call goes through `_invoke_with_retries`: some
+providers (observed with NVIDIA's hosted Nemotron Ultra) intermittently
+return a transient 500/502/503/504/429 or a bare request timeout even for
+a well-formed request, and failing the whole multi-turn tool-calling loop
+over one such blip would throw away real progress (prior successful tool
+calls) for a problem a short retry often resolves. This is a small, bounded
+retry (`_MAX_LLM_ATTEMPTS` total attempts, fixed backoff) scoped to
+exceptions that are actually transient — never applied to a genuine
+auth/validation/model error, which still fails immediately.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import TYPE_CHECKING, Protocol, TypeVar
 
+import openai
 from pydantic import BaseModel
 
 from backend.app.core.errors import LocoPilotError
@@ -33,6 +45,41 @@ if TYPE_CHECKING:
     from agents.base import ToolRunner
 
 T = TypeVar("T", bound=BaseModel)
+
+_MAX_LLM_ATTEMPTS = 3
+_RETRY_BACKOFF_SECONDS = 2.0
+_RETRYABLE_STATUS_CODES = {408, 429, 500, 502, 503, 504}
+
+
+def _is_retryable(exc: Exception) -> bool:
+    if isinstance(exc, (openai.APITimeoutError, openai.APIConnectionError)):
+        return True
+    if isinstance(exc, openai.APIStatusError):
+        if exc.status_code in _RETRYABLE_STATUS_CODES:
+            return True
+        # An empty-body 404 (no JSON error explanation, unlike a genuine
+        # "model not found") was observed directly against NVIDIA's hosted
+        # Nemotron Ultra for a model confirmed present in /v1/models — a
+        # routing-layer "no warm replica available" blip, not a permanent
+        # not-found. A real "unknown model" 404 always carries an error body.
+        if exc.status_code == 404 and not (exc.response.text or "").strip():
+            return True
+    return False
+
+
+async def _invoke_with_retries(call):
+    """Run `call()` (a zero-arg async callable), retrying a bounded number
+    of times only for exceptions classified as transient by `_is_retryable`."""
+    last_exc: Exception | None = None
+    for attempt in range(_MAX_LLM_ATTEMPTS):
+        try:
+            return await call()
+        except Exception as exc:  # noqa: BLE001 - re-raised verbatim once retries are exhausted
+            last_exc = exc
+            if attempt == _MAX_LLM_ATTEMPTS - 1 or not _is_retryable(exc):
+                raise
+            await asyncio.sleep(_RETRY_BACKOFF_SECONDS * (attempt + 1))
+    raise last_exc  # pragma: no cover - unreachable, loop always returns or raises
 
 
 class LLMUnavailableError(LocoPilotError):
@@ -109,8 +156,9 @@ class LangChainStructuredLLMClient:
         from langchain_core.messages import HumanMessage, SystemMessage
 
         structured = self._chat_model.with_structured_output(output_model)
+        messages = [SystemMessage(content=system), HumanMessage(content=user)]
         try:
-            result = await structured.ainvoke([SystemMessage(content=system), HumanMessage(content=user)])
+            result = await _invoke_with_retries(lambda: structured.ainvoke(messages))
         except TimeoutError as exc:
             raise LLMUnavailableError(f"LLM request timed out: {exc}") from exc
         except Exception as exc:  # noqa: BLE001 - any transport/provider failure is "unavailable", not a crash
@@ -141,7 +189,7 @@ class LangChainStructuredLLMClient:
 
         while calls_made < max_tool_calls:
             try:
-                response: AIMessage = await bound_model.ainvoke(messages)
+                response: AIMessage = await _invoke_with_retries(lambda: bound_model.ainvoke(messages))
             except Exception as exc:  # noqa: BLE001
                 raise LLMUnavailableError(f"LLM request failed: {exc}") from exc
             messages.append(response)
@@ -191,7 +239,7 @@ class LangChainStructuredLLMClient:
         )
         structured = self._chat_model.with_structured_output(output_model)
         try:
-            final = await structured.ainvoke(messages)
+            final = await _invoke_with_retries(lambda: structured.ainvoke(messages))
         except Exception as exc:  # noqa: BLE001
             raise LLMUnavailableError(f"LLM final structured request failed: {exc}") from exc
 
