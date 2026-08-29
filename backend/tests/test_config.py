@@ -7,7 +7,7 @@ def test_settings_load_with_defaults() -> None:
     settings = Settings(_env_file=None)
     assert settings.app_env == "development"
     assert settings.api_port == 8000
-    assert settings.llm_provider == "gemini"
+    assert settings.llm_provider == "nvidia"
 
 
 def test_database_url_is_asyncpg() -> None:

@@ -45,7 +45,11 @@ class Settings(BaseSettings):
     llm_model: str = "nvidia/nemotron-3-ultra-550b-a55b"
     llm_api_key: str | None = None
     llm_temperature: float = 0.2
-    llm_request_timeout: int = 60
+    # 90s (not the more common 60s) because the default provider, NVIDIA's
+    # hosted Nemotron Ultra (550B), routinely takes 25-40s for a single
+    # response even when healthy — a 60s timeout was observed failing
+    # mid-conversation in the Developer tool-calling loop.
+    llm_request_timeout: int = 90
 
     # ---- Embedding provider ----
     # "hashing" (default) is a free, local, deterministic embedding used so
