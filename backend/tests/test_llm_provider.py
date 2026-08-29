@@ -6,23 +6,50 @@ from backend.app.core.config import Settings
 from backend.app.core.errors import LLMConfigurationError
 from backend.app.core.llm.factory import build_llm_provider
 from backend.app.core.llm.gemini_provider import GeminiProvider
+from backend.app.core.llm.nvidia_provider import NvidiaProvider
 from backend.app.core.llm.qwen_provider import QwenProvider
 
 
-def test_factory_builds_gemini_provider_by_default() -> None:
+def test_factory_builds_nvidia_provider_by_default() -> None:
     settings = Settings(_env_file=None)
+    provider = build_llm_provider(settings)
+    assert isinstance(provider, NvidiaProvider)
+    assert provider.name == "nvidia"
+
+
+def test_factory_builds_qwen_provider_when_selected() -> None:
+    """Provider-agnostic: Qwen remains fully supported and selectable
+    purely through configuration, even though NVIDIA is now the default."""
+    settings = Settings(_env_file=None, llm_provider="qwen")
+    provider = build_llm_provider(settings)
+    assert isinstance(provider, QwenProvider)
+    assert provider.name == "qwen"
+
+
+def test_factory_builds_gemini_provider_when_selected() -> None:
+    settings = Settings(_env_file=None, llm_provider="gemini")
     provider = build_llm_provider(settings)
     assert isinstance(provider, GeminiProvider)
     assert provider.name == "gemini"
 
 
-def test_factory_builds_qwen_provider_when_selected() -> None:
-    """Provider-agnostic: Qwen remains fully supported and selectable
-    purely through configuration, even though Gemini is now the default."""
-    settings = Settings(_env_file=None, llm_provider="qwen")
-    provider = build_llm_provider(settings)
-    assert isinstance(provider, QwenProvider)
-    assert provider.name == "qwen"
+def test_nvidia_chat_model_requires_base_url_and_api_key() -> None:
+    settings = Settings(_env_file=None, llm_base_url="", llm_api_key=None)
+    provider = NvidiaProvider(settings)
+    with pytest.raises(LLMConfigurationError):
+        provider.chat_model()
+
+
+def test_nvidia_chat_model_builds_when_configured() -> None:
+    settings = Settings(
+        _env_file=None,
+        llm_base_url="https://integrate.api.nvidia.com/v1",
+        llm_api_key="test-key",
+        llm_model="nvidia/nemotron-3-ultra-550b-a55b",
+    )
+    provider = NvidiaProvider(settings)
+    chat_model = provider.chat_model()
+    assert chat_model.model_name == "nvidia/nemotron-3-ultra-550b-a55b"
 
 
 def test_factory_rejects_unknown_provider() -> None:

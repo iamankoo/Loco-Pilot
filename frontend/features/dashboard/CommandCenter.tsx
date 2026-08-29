@@ -110,7 +110,7 @@ export function CommandCenter({
   }
 
   return (
-    <section className="rounded-lg border border-gold/25 bg-gradient-to-b from-gold/[0.05] to-transparent p-6 sm:p-8">
+    <section className="rounded-xl border border-gold/25 bg-gradient-to-b from-gold/[0.06] to-transparent p-6 shadow-[0_20px_60px_-15px_rgba(0,0,0,0.5)] sm:p-8">
       {eyebrow ? <p className="text-xs uppercase tracking-widest2 text-gold/80">{eyebrow}</p> : null}
       {heading ? <h2 className={cn("font-display text-2xl text-ivory sm:text-3xl", eyebrow && "mt-2")}>{heading}</h2> : null}
 
@@ -130,9 +130,9 @@ export function CommandCenter({
           onChange={(e) => setTask(e.target.value)}
           onKeyDown={handleKeyDown}
           placeholder={placeholder}
-          rows={4}
+          rows={6}
           disabled={isBusy}
-          className="w-full resize-none rounded-md border border-line-strong bg-black/20 p-4 text-base leading-relaxed text-ivory placeholder:text-ivory-faint focus-visible:outline-none focus-visible:border-gold/50 focus-visible:ring-2 focus-visible:ring-gold/30 disabled:opacity-60"
+          className="w-full resize-none rounded-lg border border-line-strong bg-black/20 p-5 text-base leading-relaxed text-ivory placeholder:text-ivory-faint focus-visible:outline-none focus-visible:border-gold/50 focus-visible:ring-2 focus-visible:ring-gold/30 disabled:opacity-60"
         />
 
         <div className="mt-3 flex flex-wrap items-center gap-2">

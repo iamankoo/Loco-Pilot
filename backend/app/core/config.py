@@ -36,13 +36,13 @@ class Settings(BaseSettings):
     redis_password: str | None = None
 
     # ---- LLM provider ----
-    # gemini (default) | qwen — provider-agnostic: swapping is a config
-    # change (LLM_PROVIDER/LLM_MODEL/LLM_API_KEY/LLM_BASE_URL), not a code
-    # change in any agent. LLM_BASE_URL only applies to OpenAI-compatible
-    # providers (e.g. qwen) — Gemini uses Google's own endpoint.
-    llm_provider: str = "gemini"
-    llm_base_url: str = ""
-    llm_model: str = "gemini-pro-latest"
+    # nvidia (default) | gemini | qwen — provider-agnostic: swapping is a
+    # config change (LLM_PROVIDER/LLM_MODEL/LLM_API_KEY/LLM_BASE_URL), not a
+    # code change in any agent. LLM_BASE_URL only applies to OpenAI-compatible
+    # providers (nvidia, qwen) — Gemini uses Google's own endpoint.
+    llm_provider: str = "nvidia"
+    llm_base_url: str = "https://integrate.api.nvidia.com/v1"
+    llm_model: str = "nvidia/nemotron-3-ultra-550b-a55b"
     llm_api_key: str | None = None
     llm_temperature: float = 0.2
     llm_request_timeout: int = 60
