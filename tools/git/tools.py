@@ -70,7 +70,7 @@ async def _run_git(workspace: Workspace, args: list[str]) -> tuple[int, str, str
 async def _ensure_git_repo(workspace: Workspace) -> None:
     code, stdout, _ = await _run_git(workspace, ["rev-parse", "--is-inside-work-tree"])
     if code != 0 or stdout.strip() != "true":
-        raise ToolError(f"Workspace is not a Git repository: {workspace.root}")
+        raise ToolError(f"Workspace is not a Git repository: {workspace.root}", code="NOT_A_GIT_REPOSITORY")
 
 
 def _validate_branch_name(name: str) -> None:

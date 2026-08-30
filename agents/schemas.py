@@ -23,6 +23,19 @@ class Plan(BaseModel):
     # artifact this task is expected to produce, if any. None means no
     # artifact is expected — the execution completes normally either way.
     expected_artifact_glob: str | None = None
+    # Set only when the task implies the app should actually run somewhere
+    # reachable (e.g. "...and run it on local host") — argv (never a shell
+    # string), the same contract as execute_terminal_command. Tester's own
+    # deterministic code (never the LLM directly) is what actually launches
+    # this, inside the same sandbox isolation every other command gets, with
+    # the resulting port published to 127.0.0.1 only (see
+    # execution.docker.runtime.ManagedRuntime). The process this starts must
+    # bind 0.0.0.0 internally (not 127.0.0.1) for Docker's own port-publish
+    # to reach it — that only affects the container-internal bind; the host
+    # exposure stays loopback-only regardless. None means no runtime is
+    # expected — Tester behaves exactly as before this field existed.
+    run_command: list[str] | None = None
+    run_port: int | None = Field(default=None, gt=0, le=65535)
 
 
 class DeveloperPlan(BaseModel):
@@ -68,6 +81,18 @@ class TestResult(BaseModel):
     duration_ms: int | None = None
     errors: list[str] = Field(default_factory=list)
     summary: str
+    # Which kind of deterministic verification actually produced this
+    # result — lets Reviewer/the UI distinguish "a conventional test suite
+    # ran" from "no test framework exists, so Tester verified the static
+    # entry point/assets/runtime instead" from neither having happened.
+    verification_kind: Literal["automated_tests", "static_site", "none"] = "automated_tests"
+    # The real, verified local URL a runtime (agents.schemas.Plan.run_command)
+    # was actually confirmed reachable at — never set from an agent's own
+    # claim, only from execution.docker.runtime.ManagedRuntime's own HTTP
+    # readiness probe. None whenever no runtime was requested or requested
+    # but never confirmed reachable.
+    runtime_url: str | None = None
+    runtime_status: Literal["starting", "running", "verification_failed", "start_failed", "stopped"] | None = None
 
 
 class DebugResult(BaseModel):
@@ -90,6 +115,12 @@ class DebugResult(BaseModel):
         "syntax_error", "import_error", "dependency_error", "assertion_failure",
         "type_error", "runtime_error", "configuration_error", "test_failure",
         "timeout", "build_failure", "environment_error", "unknown",
+        # Phase 3 additions (static-site/runtime verification, see
+        # agents.tester's static-site path and agents.failure_classification):
+        # a referenced local asset (CSS/JS/image) is missing or not valid
+        # binary content for its type, or the runtime process never became
+        # reachable on its published port.
+        "static_asset_error", "runtime_start_error",
     ] = "unknown"
     # Derived from the real tool calls this turn actually made (read_file/
     # file_exists), never from the model's self-report of what it looked at.

@@ -43,6 +43,7 @@ from backend.app.services.execution_service import (
     create_and_run_execution,
     run_execution,
 )
+from backend.app.services import runtime_service
 from backend.app.services.workspace_discovery import discover_or_provision_workspace
 
 router = APIRouter(prefix="/executions", tags=["executions"])
@@ -282,6 +283,35 @@ async def get_execution_events_endpoint(
     tool_calls = await list_tool_calls_for_execution(db, execution_id, limit=10_000, offset=0)
 
     return build_execution_events(execution=execution, steps=steps, tool_calls=tool_calls)
+
+
+@router.get("/{execution_id}/runtime")
+async def get_execution_runtime_endpoint(
+    execution_id: uuid.UUID, db: AsyncSession = Depends(get_db)
+) -> dict:
+    """Live runtime status — distinct from the `test_results.runtime_*`
+    fields on the execution-detail response, which are a snapshot from
+    when Tester verified the runtime. A runtime deliberately outlives its
+    own execution (see `backend.app.services.runtime_service`) so an
+    "Open in Browser" link the frontend shows after the run finishes isn't
+    already dead the moment it appears — this endpoint reports whatever is
+    ACTUALLY true right now (still running, expired, explicitly stopped,
+    or never started), never a stale snapshot."""
+    execution = await get_execution(db, execution_id)
+    if execution is None:
+        raise HTTPException(404, "Execution not found.")
+    return await runtime_service.get_status(str(execution_id))
+
+
+@router.post("/{execution_id}/runtime/stop", status_code=202)
+async def stop_execution_runtime_endpoint(
+    execution_id: uuid.UUID, db: AsyncSession = Depends(get_db)
+) -> dict:
+    execution = await get_execution(db, execution_id)
+    if execution is None:
+        raise HTTPException(404, "Execution not found.")
+    stopped = await runtime_service.stop_runtime(str(execution_id))
+    return {"stopped": stopped}
 
 
 @router.post("/{execution_id}/cancel", status_code=202, response_model=ExecutionResponse)

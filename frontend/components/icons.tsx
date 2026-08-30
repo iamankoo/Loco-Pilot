@@ -136,3 +136,13 @@ export function FileIcon(props: SVGProps<SVGSVGElement>) {
     </Icon>
   );
 }
+
+export function ExternalLinkIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Icon {...props}>
+      <path d="M8.5 4.5h-4a1 1 0 0 0-1 1v9a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1v-4" />
+      <path d="M11.5 3.5h5v5" />
+      <path d="M16 4l-7 7" />
+    </Icon>
+  );
+}

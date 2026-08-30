@@ -38,7 +38,7 @@ from execution.docker.errors import (
     ImageUnavailableError,
     WorkspaceTransferError,
 )
-from execution.docker.policy import NetworkPolicy, ResourceLimits
+from execution.docker.policy import NetworkPolicy, PortPublish, ResourceLimits
 from tools.terminal.contract import TerminalCommandResult
 from tools.workspace import Workspace, WorkspaceError
 
@@ -47,7 +47,7 @@ CONTAINER_NAME_PREFIX = "locopilot-sbx-"
 _CONTROL_COMMAND_TIMEOUT = 30
 
 
-async def _run_docker(*args: str, timeout: float | None = None) -> tuple[int, bytes, bytes]:
+async def run_docker(*args: str, timeout: float | None = None) -> tuple[int, bytes, bytes]:
     try:
         process = await asyncio.create_subprocess_exec(
             "docker", *args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
@@ -73,12 +73,21 @@ class Sandbox:
         image: str = DEFAULT_IMAGE,
         resource_limits: ResourceLimits | None = None,
         network_policy: NetworkPolicy = NetworkPolicy.DISABLED,
+        name_prefix: str = CONTAINER_NAME_PREFIX,
+        ports: list[PortPublish] | None = None,
     ) -> None:
         self.workspace = workspace
         self.image = image
         self.resource_limits = resource_limits or ResourceLimits()
         self.network_policy = network_policy
-        self.name = f"{CONTAINER_NAME_PREFIX}{uuid.uuid4().hex[:12]}"
+        # `ports` publishes a container port to the host — only ever used by
+        # a long-lived runtime (execution.docker.runtime.ManagedRuntime), and
+        # only ever requires NetworkPolicy.ALLOWED (`--network none` has no
+        # bridge interface for Docker to forward a published port through).
+        # A one-shot command sandbox (tools.terminal.docker_executor) never
+        # passes this.
+        self.ports = ports or []
+        self.name = f"{name_prefix}{uuid.uuid4().hex[:12]}"
         self._created = False
 
     async def create(self) -> None:
@@ -86,12 +95,19 @@ class Sandbox:
             raise NotImplementedError(
                 "NetworkPolicy.RESTRICTED is reserved for a later milestone; use DISABLED or ALLOWED."
             )
+        if self.ports and self.network_policy is NetworkPolicy.DISABLED:
+            raise ValueError("Publishing a port requires NetworkPolicy.ALLOWED — DISABLED has no network at all.")
         network_args = ["--network", "none"] if self.network_policy is NetworkPolicy.DISABLED else []
+        # Host-side loopback-only binding, never 0.0.0.0 — see PortPublish.
+        port_args = []
+        for p in self.ports:
+            port_args += ["-p", f"127.0.0.1:{p.host_port}:{p.container_port}"]
 
         args = [
             "create",
             "--name", self.name,
             *network_args,
+            *port_args,
             "--memory", self.resource_limits.memory,
             "--cpus", self.resource_limits.cpus,
             "--pids-limit", str(self.resource_limits.pids_limit),
@@ -106,7 +122,7 @@ class Sandbox:
             "sleep", "infinity",
         ]
 
-        code, _, stderr = await _run_docker(*args, timeout=_CONTROL_COMMAND_TIMEOUT)
+        code, _, stderr = await run_docker(*args, timeout=_CONTROL_COMMAND_TIMEOUT)
         if code != 0:
             message = stderr.decode("utf-8", errors="replace").strip()
             if "no such image" in message.lower() or "not found" in message.lower():
@@ -117,7 +133,7 @@ class Sandbox:
     async def start(self) -> None:
         if not self._created:
             raise ContainerStartError("Cannot start a sandbox that has not been created.")
-        code, _, stderr = await _run_docker("start", self.name, timeout=_CONTROL_COMMAND_TIMEOUT)
+        code, _, stderr = await run_docker("start", self.name, timeout=_CONTROL_COMMAND_TIMEOUT)
         if code != 0:
             raise ContainerStartError(stderr.decode("utf-8", errors="replace").strip())
 
@@ -175,7 +191,7 @@ class Sandbox:
             # A `docker exec` client timing out does not stop the process
             # running inside the container's own namespace — only killing
             # the container itself actually stops a hung command.
-            await _run_docker("kill", self.name, timeout=10)
+            await run_docker("kill", self.name, timeout=10)
             stdout_bytes, stderr_bytes = await process.communicate()
             exit_code = None
 
@@ -192,6 +208,31 @@ class Sandbox:
             timed_out=timed_out,
         )
 
+    async def execute_detached(self, command: list[str], *, cwd: str = ".") -> None:
+        """Starts `command` inside the running container via `docker exec -d`
+        (native detached exec) and returns as soon as it has been launched —
+        never waits for it to exit. Only meaningful use case: a long-running
+        server process for `execution.docker.runtime.ManagedRuntime`; a
+        normal one-shot command must use `execute()`, which actually waits
+        for and reports the real exit code/output. This method cannot report
+        an exit code (the process is still running, by design) — actual
+        success is only established by `ManagedRuntime`'s own HTTP readiness
+        probe against the published port, never by this call succeeding to
+        merely start the process.
+        """
+        try:
+            resolved_cwd = self.workspace.resolve(cwd)
+        except WorkspaceError as exc:
+            raise WorkspaceTransferError(f"Invalid working directory: {exc}") from exc
+        relative = self.workspace.relative(resolved_cwd)
+        container_cwd = "/workspace" if relative == "." else f"/workspace/{relative}"
+
+        code, _, stderr = await run_docker(
+            "exec", "-d", "-w", container_cwd, self.name, *command, timeout=_CONTROL_COMMAND_TIMEOUT
+        )
+        if code != 0:
+            raise ContainerStartError(f"Failed to start detached command: {stderr.decode('utf-8', errors='replace').strip()}")
+
     async def copy_in(self, host_path: Path, container_path: str) -> None:
         """Copies an additional host file/dir into the container, beyond the
         live workspace bind mount. Source must be inside the sandbox's own
@@ -204,7 +245,7 @@ class Sandbox:
         if container_path != "/workspace" and not container_path.startswith("/workspace/"):
             raise WorkspaceTransferError(f"copy_in destination must be under /workspace: {container_path}")
 
-        code, _, stderr = await _run_docker(
+        code, _, stderr = await run_docker(
             "cp", str(resolved), f"{self.name}:{container_path}", timeout=_CONTROL_COMMAND_TIMEOUT
         )
         if code != 0:
@@ -226,14 +267,14 @@ class Sandbox:
             raise ArtifactTransferError(f"copy_out source must be under /workspace: {container_path}")
 
         resolved_dest.parent.mkdir(parents=True, exist_ok=True)
-        code, _, stderr = await _run_docker(
+        code, _, stderr = await run_docker(
             "cp", f"{self.name}:{container_path}", str(resolved_dest), timeout=_CONTROL_COMMAND_TIMEOUT
         )
         if code != 0:
             raise ArtifactTransferError(stderr.decode("utf-8", errors="replace").strip())
 
     async def inspect(self) -> dict:
-        code, stdout, _stderr = await _run_docker("inspect", self.name, timeout=10)
+        code, stdout, _stderr = await run_docker("inspect", self.name, timeout=10)
         if code != 0:
             return {"exists": False}
         data = json.loads(stdout.decode("utf-8", errors="replace"))[0]
@@ -248,5 +289,5 @@ class Sandbox:
     async def destroy(self) -> None:
         if not self._created:
             return
-        await _run_docker("rm", "-f", self.name, timeout=_CONTROL_COMMAND_TIMEOUT)
+        await run_docker("rm", "-f", self.name, timeout=_CONTROL_COMMAND_TIMEOUT)
         self._created = False

@@ -17,6 +17,7 @@ import { ActivityTimeline } from "@/features/execution/ActivityTimeline";
 import { ToolCallInspector } from "@/features/execution/ToolCallInspector";
 import { FilesChanged } from "@/features/execution/FilesChanged";
 import { TestResultsPanel } from "@/features/execution/TestResultsPanel";
+import { RuntimePanel } from "@/features/execution/RuntimePanel";
 import { PlanPanel } from "@/features/execution/PlanPanel";
 import { ReviewPanel } from "@/features/execution/ReviewPanel";
 import { DebugRetryPanel } from "@/features/execution/DebugRetryPanel";
@@ -86,6 +87,12 @@ export default function ExecutionDetailPage() {
           <Panel title="Test Results">
             <TestResultsPanel results={data.test_results} />
           </Panel>
+
+          {data.test_results?.runtime_status ? (
+            <Panel title="Running Locally">
+              <RuntimePanel executionId={data.id} testResults={data.test_results} />
+            </Panel>
+          ) : null}
 
           <Panel title="Review">
             <ReviewPanel review={data.review_result} />

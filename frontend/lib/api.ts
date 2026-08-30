@@ -10,6 +10,7 @@ import type {
   ProjectDetail,
   ProjectListResponse,
   ProjectSummary,
+  RuntimeStatus,
   ToolCallListResponse,
   UploadResponse,
   WorkspaceListResponse,
@@ -124,4 +125,10 @@ export const api = {
 
   cancelExecution: (executionId: string) =>
     request<ExecutionRecord>(`/api/v1/executions/${executionId}/cancel`, { method: "POST" }),
+
+  getExecutionRuntime: (executionId: string) =>
+    request<RuntimeStatus>(`/api/v1/executions/${executionId}/runtime`),
+
+  stopExecutionRuntime: (executionId: string) =>
+    request<{ stopped: boolean }>(`/api/v1/executions/${executionId}/runtime/stop`, { method: "POST" }),
 };

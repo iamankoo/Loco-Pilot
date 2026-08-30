@@ -49,6 +49,18 @@ _PATTERNS: tuple[tuple[FailureClass, re.Pattern], ...] = (
             re.IGNORECASE,
         ),
     ),
+    # Phase 3: agents.tester's static-site verification path produces
+    # errors/summary text with these exact phrasings — matched here, not
+    # invented, so a genuinely distinct root cause routes Debugger toward
+    # the right investigation instead of a generic "test_failure".
+    (
+        "static_asset_error",
+        re.compile(r"referenced (local )?asset (not found|is not valid)|missing (local )?asset", re.IGNORECASE),
+    ),
+    (
+        "runtime_start_error",
+        re.compile(r"runtime (container|server) (failed to start|never became reachable)", re.IGNORECASE),
+    ),
 )
 
 

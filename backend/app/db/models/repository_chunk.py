@@ -20,7 +20,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from backend.app.db.base import Base
 from backend.app.db.models.mixins import TimestampMixin, UUIDPrimaryKeyMixin
 
-EMBEDDING_DIMENSION = 384
+EMBEDDING_DIMENSION = 2048
 
 
 class RepositoryChunk(Base, UUIDPrimaryKeyMixin, TimestampMixin):

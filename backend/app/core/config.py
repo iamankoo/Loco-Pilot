@@ -56,6 +56,40 @@ class Settings(BaseSettings):
     # — this is provider-side latency, not runaway context.
     llm_request_timeout: int = 180
 
+    # ---- Role-based model routing ----
+    # Every role shares the same provider/base_url/api_key (one NVIDIA
+    # account) — only the MODEL NAME varies per role (see
+    # backend.app.core.llm.factory.get_llm_provider's `model` override).
+    # Each defaults to None, meaning "use LLM_MODEL for this role too" —
+    # leaving all four unset reproduces the original single-model behavior
+    # exactly. Tester never calls an LLM at all (fully deterministic), so
+    # it has no corresponding setting.
+    planner_model: str | None = None
+    developer_model: str | None = None
+    debugger_model: str | None = None
+    reviewer_model: str | None = None
+
+    # ---- Vision provider (optional) ----
+    # Unset by default — no browser/UI visual-verification capability
+    # exists yet to consume this. Reuses the same NVIDIA account/key as
+    # LLM_API_KEY when set; a distinct VISION_API_KEY is only needed if a
+    # different provider/account is used for vision specifically.
+    vision_model: str | None = None
+    vision_base_url: str | None = None
+    vision_api_key: str | None = None
+
+    # ---- Image generation provider (optional) ----
+    # Unset by default: no image-generation model exists on the currently
+    # configured NVIDIA account. Provider-agnostic, same shape as the LLM/
+    # embedding providers — set all four to enable
+    # `tools.image.GenerateImageTool` once a real text-to-image API is
+    # available; until then the tool reports a clear "not configured"
+    # error rather than fabricating an image.
+    image_provider: str | None = None
+    image_base_url: str | None = None
+    image_model: str | None = None
+    image_api_key: str | None = None
+
     # ---- Embedding provider ----
     # "hashing" (default) is a free, local, deterministic embedding used so
     # the RAG pipeline runs without any paid API. "openai_compatible" uses
@@ -68,7 +102,7 @@ class Settings(BaseSettings):
     # Fixed pgvector column width — the hashing provider always produces
     # this many dimensions; an OpenAI-compatible provider is asked to
     # truncate to this same width so the schema stays provider-agnostic.
-    embedding_dimension: int = 384
+    embedding_dimension: int = 2048
 
     # ---- Agent execution ----
     max_debug_retries: int = 2

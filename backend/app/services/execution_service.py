@@ -43,18 +43,21 @@ class ExecutionServiceError(Exception):
     pass
 
 
-def _build_llm_client() -> StructuredLLMClient:
+def _build_llm_client(model: str | None = None) -> StructuredLLMClient:
     """Never fails: a broken/misconfigured provider must not prevent
     creating the execution record. Instead of collapsing every failure
     into a generic "no client configured" message, the real reason
     (missing key, wrong model, provider/account not authorized, ...) is
     captured and surfaced verbatim the first time an agent actually
-    tries to use the LLM."""
+    tries to use the LLM. `model` overrides only the model name for
+    role-based routing (PLANNER_MODEL/DEVELOPER_MODEL/DEBUGGER_MODEL/
+    REVIEWER_MODEL) — the provider/base_url/api_key stay whatever LLM_*
+    already configures."""
     try:
-        provider = get_llm_provider()
+        provider = get_llm_provider(model=model)
         return LangChainStructuredLLMClient(provider.chat_model())
     except Exception as exc:  # noqa: BLE001
-        logger.warning("llm_provider_unavailable", error=str(exc))
+        logger.warning("llm_provider_unavailable", model=model, error=str(exc))
         return UnavailableLLMClient(str(exc))
 
 
@@ -152,6 +155,10 @@ async def run_execution(execution_id: uuid.UUID) -> None:
                     llm_client=_build_llm_client(),
                     embedding_provider=get_embedding_provider(),
                     db=db,
+                    planner_llm_client=_build_llm_client(settings.planner_model) if settings.planner_model else None,
+                    developer_llm_client=_build_llm_client(settings.developer_model) if settings.developer_model else None,
+                    debugger_llm_client=_build_llm_client(settings.debugger_model) if settings.debugger_model else None,
+                    reviewer_llm_client=_build_llm_client(settings.reviewer_model) if settings.reviewer_model else None,
                     max_debug_retries=settings.max_debug_retries,
                     max_review_retries=settings.max_review_retries,
                     max_tool_calls_per_agent=settings.max_tool_calls_per_agent,

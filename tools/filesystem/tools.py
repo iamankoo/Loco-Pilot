@@ -9,6 +9,8 @@ ever shells out for a filesystem operation (pathlib/os/shutil only).
 
 from __future__ import annotations
 
+import base64
+import binascii
 import fnmatch
 import os
 import shutil
@@ -190,13 +192,26 @@ class ReadFileTool(Tool[ReadFileInput, ReadFileOutput]):
 
 class WriteFileTool(Tool[WriteFileInput, WriteFileOutput]):
     name = "write_file"
-    description = "Write text content to a file within the workspace, creating or overwriting it."
+    description = (
+        "Write content to a file within the workspace, creating or overwriting it. "
+        "encoding='text' (default) writes `content` as UTF-8 text. encoding='base64' decodes `content` "
+        "as standard base64 and writes the real binary bytes — use this for any binary asset "
+        "(PNG/JPEG/GIF/WebP image, etc.); writing base64 text with encoding='text' produces a "
+        "corrupt, unopenable file."
+    )
     permission = Permission.WRITE
     input_model = WriteFileInput
     output_model = WriteFileOutput
 
     async def run(self, tool_input: WriteFileInput, context: ToolContext) -> WriteFileOutput:
-        content_bytes = tool_input.content.encode("utf-8")
+        if tool_input.encoding == "base64":
+            try:
+                content_bytes = base64.b64decode(tool_input.content, validate=True)
+            except (binascii.Error, ValueError) as exc:
+                raise ToolError(f"Invalid base64 content: {exc}", code="INVALID_BASE64") from exc
+        else:
+            content_bytes = tool_input.content.encode("utf-8")
+
         if len(content_bytes) > MAX_WRITE_BYTES:
             raise ToolError(f"Content exceeds maximum write size of {MAX_WRITE_BYTES} bytes.", code="FILE_TOO_LARGE")
 
@@ -211,7 +226,7 @@ class WriteFileTool(Tool[WriteFileInput, WriteFileOutput]):
         if already_existed and not tool_input.overwrite:
             raise ToolError(f"File already exists and overwrite=False: {tool_input.path}", code="DESTINATION_EXISTS")
 
-        before_text = _read_text_for_diff(target) if already_existed else None
+        before_text = _read_text_for_diff(target) if already_existed and tool_input.encoding == "text" else None
 
         if not target.parent.exists():
             if not tool_input.create_parents:
@@ -228,14 +243,24 @@ class WriteFileTool(Tool[WriteFileInput, WriteFileOutput]):
         if not target.is_file() or target.stat().st_size != len(content_bytes):
             raise ToolError(f"Write verification failed: {tool_input.path}")
 
-        file_diff = compute_diff(tool_input.path, before_text, tool_input.content)
+        if tool_input.encoding == "base64":
+            # A byte-for-byte diff of binary content isn't useful context —
+            # a one-line description of what happened is (matches how
+            # _read_text_for_diff already treats an existing binary file:
+            # no diff, just the fact that something changed).
+            diff_text = f"Binary file {'created' if not already_existed else 'replaced'}: {tool_input.path} ({len(content_bytes)} bytes)"
+            diff_truncated = False
+        else:
+            file_diff = compute_diff(tool_input.path, before_text, tool_input.content)
+            diff_text = file_diff.diff
+            diff_truncated = file_diff.truncated
 
         return WriteFileOutput(
             path=tool_input.path,
             bytes_written=len(content_bytes),
             created=not already_existed,
-            diff=file_diff.diff,
-            diff_truncated=file_diff.truncated,
+            diff=diff_text,
+            diff_truncated=diff_truncated,
         )
 
 

@@ -38,6 +38,9 @@ class TestResultSummary(BaseModel):
     failed: int = 0
     errors: list[str] = []
     summary: str | None = None
+    verification_kind: str = "automated_tests"
+    runtime_url: str | None = None
+    runtime_status: str | None = None
 
 
 class ReviewResultSummary(BaseModel):

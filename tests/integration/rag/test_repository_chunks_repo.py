@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 
+from backend.app.db.models.repository_chunk import EMBEDDING_DIMENSION
 from backend.app.db.repositories.projects import create_project
 from backend.app.db.repositories.repository_chunks import (
     count_chunks_for_project,
@@ -10,7 +11,9 @@ from backend.app.db.repositories.repository_chunks import (
     similarity_search,
 )
 
-_DIM = 384
+# Matches the real pgvector column width rather than re-hardcoding a magic
+# number that would silently drift out of sync with a future schema change.
+_DIM = EMBEDDING_DIMENSION
 
 
 def _vec(seed: float) -> list[float]:

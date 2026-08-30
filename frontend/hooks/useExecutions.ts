@@ -62,6 +62,22 @@ export function useExecutionArtifacts(executionId: string | undefined, active: b
   });
 }
 
+/** Live runtime status (see backend runtime_service) — distinct from the
+ * historical `test_results.runtime_*` snapshot: a runtime deliberately
+ * outlives its own execution, so this keeps polling (slowly) even once the
+ * execution itself is terminal, until the runtime is reported stopped. */
+export function useExecutionRuntime(executionId: string | undefined, hasRuntime: boolean) {
+  return useQuery({
+    queryKey: ["execution-runtime", executionId],
+    queryFn: () => api.getExecutionRuntime(executionId as string),
+    enabled: Boolean(executionId) && hasRuntime,
+    refetchInterval: (query) => {
+      const status = query.state.data?.status;
+      return status === "running" || status === "starting" ? DETAIL_POLL_MS : 15_000;
+    },
+  });
+}
+
 const OVERVIEW_STATUSES = ["running", "pending", "passed", "failed"] as const;
 
 /** Global status counts derived from real `total` fields returned by the

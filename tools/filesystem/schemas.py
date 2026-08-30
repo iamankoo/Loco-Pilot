@@ -58,6 +58,13 @@ class WriteFileInput(BaseModel):
     content: str
     create_parents: bool = True
     overwrite: bool = True
+    # "text" (default, unchanged behavior): `content` is written as UTF-8
+    # text. "base64": `content` is standard base64 of the real binary bytes
+    # to write (e.g. an actual PNG/JPEG) — the only way a binary asset gets
+    # created correctly, since an agent has no other channel to produce raw
+    # bytes. Writing base64 TEXT as if it were the file's real content
+    # (encoding="text") produces a corrupt, unopenable "image".
+    encoding: Literal["text", "base64"] = "text"
 
 
 class WriteFileOutput(BaseModel):

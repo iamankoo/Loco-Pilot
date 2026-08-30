@@ -26,7 +26,12 @@ _TOKEN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*|[0-9]+")
 
 class HashingEmbeddingProvider(EmbeddingProvider):
     name = "hashing"
-    dimension = 384
+    # Matches backend.app.db.models.repository_chunk.EMBEDDING_DIMENSION —
+    # an arbitrary hash-bucket count with no semantic meaning tied to the
+    # number itself, so it can freely match whatever the fixed pgvector
+    # column width is (currently sized for nvidia/nemotron-3-embed-1b, the
+    # default real embedding provider — see EMBEDDING_PROVIDER).
+    dimension = 2048
 
     async def embed(self, texts: list[str]) -> list[list[float]]:
         return [self._embed_one(text) for text in texts]

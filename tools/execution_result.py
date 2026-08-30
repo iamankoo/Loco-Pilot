@@ -17,4 +17,11 @@ class ToolExecutionResult(BaseModel):
     status: Literal["success", "error"]
     output: dict | None
     error: str | None
+    # The coarse, machine-checkable classification from `ToolError.code`
+    # (e.g. "NOT_A_GIT_REPOSITORY", "PATH_OUTSIDE_WORKSPACE"), when the tool
+    # raised one — None for a success, an unclassified ToolError, or an
+    # unexpected exception. Lets a caller (agents.reviewer) distinguish a
+    # specific, known-benign failure kind from a genuinely unexpected one
+    # without parsing the human-readable `error` message text.
+    error_code: str | None = None
     duration_ms: int

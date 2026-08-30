@@ -72,9 +72,21 @@ _STAGE_RETRIEVAL_AGENTS = {"developer", "debugger", "reviewer"}
 @dataclass
 class GraphDependencies:
     registry: ToolRegistry
+    # The default/fallback client — used by any role below with no
+    # role-specific override, and by every role when none are set at all
+    # (the original, single-model behavior, unchanged).
     llm_client: StructuredLLMClient | None
     embedding_provider: EmbeddingProvider
     db: AsyncSession | None = None
+    # Role-based model routing (all optional; each falls back to
+    # `llm_client` when unset — see `backend.app.services.execution_service`
+    # for how these are actually built from PLANNER_MODEL/DEVELOPER_MODEL/
+    # DEBUGGER_MODEL/REVIEWER_MODEL). Tester has no corresponding field —
+    # it never calls an LLM at all.
+    planner_llm_client: StructuredLLMClient | None = None
+    developer_llm_client: StructuredLLMClient | None = None
+    debugger_llm_client: StructuredLLMClient | None = None
+    reviewer_llm_client: StructuredLLMClient | None = None
     max_debug_retries: int = 2
     # Bounds the Reviewer -> Developer -> Tester -> Reviewer loop
     # (Phase 2.8), independent of `max_debug_retries` — a "changes
@@ -95,6 +107,9 @@ class GraphDependencies:
     # `analysis.scanner.ScanLimits`); None uses that module's own defaults.
     workspace_scan_max_files: int | None = None
     workspace_scan_max_depth: int | None = None
+
+    def llm_client_for(self, agent_name: str) -> StructuredLLMClient | None:
+        return getattr(self, f"{agent_name}_llm_client", None) or self.llm_client
 
 
 def _summarize(value: object) -> object:
@@ -215,7 +230,7 @@ def make_agent_node(
 
         remaining_total = max(0, deps.max_total_tool_calls - len(state.tool_calls))
         max_tool_calls = min(deps.max_tool_calls_per_agent, remaining_total)
-        agent = agent_cls(llm_client=deps.llm_client, tools=tools, max_tool_calls=max_tool_calls)
+        agent = agent_cls(llm_client=deps.llm_client_for(agent_cls.name), tools=tools, max_tool_calls=max_tool_calls)
 
         try:
             update = await agent.run(run_state)

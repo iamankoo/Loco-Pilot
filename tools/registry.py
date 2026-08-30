@@ -66,6 +66,13 @@ def build_default_registry() -> ToolRegistry:
     for agent use. As of Phase 1.4, `execute_terminal_command` IS
     registered, backed by the real Docker sandbox (`execution.docker`).
     """
+    from tools.documents.tools import (
+        ConvertFileTool,
+        GenerateCsvTool,
+        GenerateDocxTool,
+        GeneratePdfTool,
+        GenerateXlsxTool,
+    )
     from tools.filesystem.tools import (
         DeleteFileTool,
         EditFileTool,
@@ -82,6 +89,7 @@ def build_default_registry() -> ToolRegistry:
         GitDiffTool,
         GitStatusTool,
     )
+    from tools.image import GenerateImageTool
     from tools.terminal.tools import ExecuteTerminalCommandTool
 
     registry = ToolRegistry()
@@ -99,6 +107,12 @@ def build_default_registry() -> ToolRegistry:
         GitBranchTool(),
         GitCreateBranchTool(),
         ExecuteTerminalCommandTool(),
+        GeneratePdfTool(),
+        GenerateDocxTool(),
+        GenerateXlsxTool(),
+        GenerateCsvTool(),
+        ConvertFileTool(),
+        GenerateImageTool(),
     ):
         registry.register(tool)
     return registry

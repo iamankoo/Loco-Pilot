@@ -45,6 +45,7 @@ async def execute_tool(
     start = time.monotonic()
     status: Literal["success", "error"] = "success"
     error_message: str | None = None
+    error_code: str | None = None
     output_payload: dict | None = None
 
     try:
@@ -54,6 +55,7 @@ async def execute_tool(
     except ToolError as exc:
         status = "error"
         error_message = str(exc)
+        error_code = exc.code
     except Exception as exc:  # noqa: BLE001 - unexpected tool failures must still be recorded, not crash the caller
         status = "error"
         error_message = f"Unexpected error: {exc}"

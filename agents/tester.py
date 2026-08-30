@@ -29,7 +29,11 @@ import re
 from agents.base import BaseAgent
 from agents.schemas import TestResult
 from agents.state import ExecutionState
+from analysis.document_artifact import verify_document_artifacts
+from analysis.static_site import verify_static_site
 from analysis.test_selection import select_test_targets
+from backend.app.services import runtime_service
+from tools.workspace import Workspace, WorkspaceError
 
 _TEST_EXECUTION_TOOL_NAMES = ("run_tests", "execute_terminal_command")
 
@@ -161,11 +165,7 @@ class TesterAgent(BaseAgent):
 
         framework, command = await self._determine_command(state)
         if framework is None or command is None:
-            return self._unavailable(
-                state,
-                "Could not determine an appropriate test command: no recognized test framework "
-                "or project marker file was found in the workspace."
-            )
+            return await self._run_project_type_fallback_check(state)
 
         result = await self.tools.call(
             execution_tool,
@@ -290,6 +290,148 @@ class TesterAgent(BaseAgent):
             if marker in names:
                 return framework, command
         return None, None
+
+    async def _run_project_type_fallback_check(self, state: ExecutionState) -> dict:
+        """Dispatches to whichever deterministic, no-conventional-test-
+        framework verification actually applies — a static website
+        (`_run_static_site_check`) or a generated document/spreadsheet
+        deliverable (`_run_document_artifact_check`) — before finally
+        falling back to the original "unavailable" outcome when neither
+        applies (a non-web, non-document project with no test framework) or
+        the workspace itself can't be opened (e.g. this agent exercised
+        directly in a unit test, with no real workspace on disk)."""
+        try:
+            workspace = Workspace.at(state.workspace_root)
+        except WorkspaceError:
+            return self._unavailable(
+                state,
+                "Could not determine an appropriate test command: no recognized test framework "
+                "or project marker file was found in the workspace.",
+            )
+
+        static_site_result = await self._run_static_site_check(state, workspace)
+        if static_site_result is not None:
+            return static_site_result
+
+        document_result = self._run_document_artifact_check(state, workspace)
+        if document_result is not None:
+            return document_result
+
+        return self._unavailable(
+            state,
+            "Could not determine an appropriate test command: no recognized test framework, no HTML "
+            "entry point, and no generated document/spreadsheet artifact was found in the workspace.",
+        )
+
+    def _run_document_artifact_check(self, state: ExecutionState, workspace: Workspace) -> dict | None:
+        """Verifies a generated document/spreadsheet deliverable (PDF/DOCX/
+        XLSX/CSV, via tools/documents/tools.py) actually exists and is a
+        genuinely valid file of its claimed type — without this, a task
+        like "create a PDF report" could never honestly reach "passed"
+        (agents.state.compute_honest_status requires a real passing
+        TestResult), permanently capping even a correctly-completed
+        document task at "needs_review". Returns None (not a TestResult) if
+        no document tool was ever used this execution, so the caller can
+        fall through to the final "unavailable" outcome."""
+        verification = verify_document_artifacts(workspace, state.files_changed)
+        if not verification.found_any:
+            return None
+
+        errors = [f"Generated artifact not found: {path}" for path in verification.missing_paths]
+        errors += [f"Generated artifact is not valid: {path} ({reason})" for path, reason in verification.invalid_paths]
+        status = "passed" if verification.ok else "failed"
+
+        summary = f"Document artifact check: {len(verification.checked_paths)} generated file(s) verified"
+        summary += "." if status == "passed" else " — see errors."
+
+        test_result = TestResult(
+            status=status,
+            framework="document-artifact",
+            commands=[],
+            errors=errors,
+            summary=summary,
+            verification_kind="static_site",  # reuses the same "not a conventional test suite" evidence lane
+        )
+        update = {
+            "test_results": test_result,
+            "current_agent": self.name,
+            "execution_status": "reviewing",
+            "messages": [f"Tester: {summary}"],
+        }
+        debug_attempts = _patch_last_debug_attempt(state, test_result)
+        if debug_attempts is not None:
+            update["debug_attempts"] = debug_attempts
+        return update
+
+    async def _run_static_site_check(self, state: ExecutionState, workspace: Workspace) -> dict | None:
+        """Deterministically confirms the real entry HTML exists, every
+        local CSS/JS/image reference it makes actually resolves to a real
+        file, and — for an image — that file's content is genuinely the
+        binary format its extension claims (closes the exact bug class
+        where a model writes base64 TEXT to a `.png` path via a text-only
+        write). If the plan specifies `run_command`/`run_port` (the task
+        implied "run it on localhost"), also starts a real, localhost-only
+        runtime and confirms it actually answers HTTP requests before ever
+        calling this "passed" — never from an agent's own claim. Returns
+        None (not a TestResult) if no HTML entry point exists at all, so
+        the caller can try the next project-type check."""
+        hint_paths = list(state.plan.files_likely_involved) if state.plan else []
+        verification = verify_static_site(workspace, hint_paths=hint_paths)
+
+        if verification.entry_path is None:
+            return None
+
+        errors: list[str] = [f"Referenced local asset not found: {path}" for path in verification.missing_assets]
+        errors += [f"Referenced local asset is not valid: {path} ({reason})" for path, reason in verification.invalid_assets]
+
+        runtime_url: str | None = None
+        runtime_status: str | None = None
+        run_command = state.plan.run_command if state.plan else None
+        run_port = state.plan.run_port if state.plan else None
+        if run_command and run_port:
+            record = await runtime_service.start_runtime(
+                state.execution_id, workspace, command=run_command, container_port=run_port
+            )
+            runtime_status = record.status
+            if record.status == "running":
+                runtime_url = record.runtime.url
+            else:
+                errors.append(f"Runtime server failed to start or never became reachable: {record.detail}")
+
+        assets_ok = not verification.missing_assets and not verification.invalid_assets
+        runtime_ok = runtime_status in (None, "running")
+        status = "passed" if assets_ok and runtime_ok else "failed"
+
+        summary = (
+            f"Static site check: entry point {verification.entry_path}, "
+            f"{len(verification.checked_assets)} local asset reference(s) checked"
+        )
+        if runtime_status == "running":
+            summary += f", runtime verified reachable at {runtime_url}"
+        elif runtime_status is not None:
+            summary += f", runtime {runtime_status}"
+        summary += "." if status == "passed" else " — see errors."
+
+        test_result = TestResult(
+            status=status,
+            framework="static-site",
+            commands=[" ".join(run_command)] if run_command else [],
+            errors=errors,
+            summary=summary,
+            verification_kind="static_site",
+            runtime_url=runtime_url,
+            runtime_status=runtime_status,
+        )
+        update = {
+            "test_results": test_result,
+            "current_agent": self.name,
+            "execution_status": "reviewing",
+            "messages": [f"Tester: {summary}"],
+        }
+        debug_attempts = _patch_last_debug_attempt(state, test_result)
+        if debug_attempts is not None:
+            update["debug_attempts"] = debug_attempts
+        return update
 
     def _unavailable(self, state: ExecutionState, summary: str) -> dict:
         test_result = TestResult(status="unavailable", commands=[], passed=0, failed=0, errors=[], summary=summary)

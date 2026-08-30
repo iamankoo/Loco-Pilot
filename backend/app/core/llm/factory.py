@@ -31,5 +31,14 @@ def build_llm_provider(settings: Settings) -> LLMProvider:
 
 
 @lru_cache
-def get_llm_provider() -> LLMProvider:
-    return build_llm_provider(get_settings())
+def get_llm_provider(model: str | None = None) -> LLMProvider:
+    """`model`, when given, overrides only `Settings.llm_model` — every other
+    connection setting (provider, base_url, api_key, temperature, timeout)
+    stays shared, since role-based routing (agents.graph/execution_service)
+    picks a different MODEL per role on the same account/provider, not a
+    different provider entirely. `None` (the default) is the original,
+    single-model behavior, unchanged."""
+    settings = get_settings()
+    if model:
+        settings = settings.model_copy(update={"llm_model": model})
+    return build_llm_provider(settings)

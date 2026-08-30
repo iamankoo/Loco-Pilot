@@ -41,6 +41,15 @@ export interface TestResultSummary {
   failed: number;
   errors: string[];
   summary: string | null;
+  verification_kind: "automated_tests" | "static_site" | "none";
+  runtime_url: string | null;
+  runtime_status: "starting" | "running" | "verification_failed" | "start_failed" | "stopped" | null;
+}
+
+export interface RuntimeStatus {
+  status: "starting" | "running" | "verification_failed" | "start_failed" | "stopped" | "no_runtime";
+  url: string | null;
+  detail: string | null;
 }
 
 export interface ReviewResultSummary {
