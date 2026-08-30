@@ -75,6 +75,48 @@ async def test_read_rejects_binary_file(ctx: ToolContext) -> None:
         await ReadFileTool().run(ReadFileInput(path="bin.dat"), ctx)
 
 
+async def test_write_rejects_content_with_escaped_newlines_instead_of_real_ones(ctx: ToolContext) -> None:
+    """Phase 8: a real bug class found via end-to-end testing — a model
+    double-escaping newlines in a large multi-line tool-call argument
+    produces a file with literal '\\n' two-character sequences and zero
+    real line breaks (e.g. a CSS file where every selector glues to the
+    next), which still "exists" but silently fails to render/parse
+    correctly. This must be caught before it's written, the same
+    discipline as the base64-text-in-a-binary-file check."""
+    corrupted = "body {\\n  color: red;\\n}\\n" * 30  # >500 bytes, 0 real newlines, many literal \n
+    with pytest.raises(ToolError) as exc:
+        await WriteFileTool().run(WriteFileInput(path="style.css", content=corrupted), ctx)
+    assert exc.value.code == "SUSPECTED_ESCAPED_NEWLINES"
+    assert not (ctx.workspace.root / "style.css").exists()
+
+
+async def test_write_accepts_real_multiline_content_with_incidental_backslash_n(ctx: ToolContext) -> None:
+    """Must never false-positive on ordinary source code that legitimately
+    contains the two characters '\\n' inside a string literal — the
+    signal is the ABSENCE of any real newline in a long file, not the
+    mere presence of the escape sequence."""
+    real_source = "\n".join(f'print("line {i}\\n")' for i in range(30))
+    out = await WriteFileTool().run(WriteFileInput(path="script.py", content=real_source), ctx)
+    assert out.created is True
+
+
+async def test_write_accepts_short_single_line_content(ctx: ToolContext) -> None:
+    """A short file with no newlines at all (well under the size floor)
+    must never be rejected — most real one-liners are short."""
+    out = await WriteFileTool().run(WriteFileInput(path="short.txt", content="just one line, no newline"), ctx)
+    assert out.created is True
+
+
+async def test_edit_file_rejects_new_string_with_escaped_newlines(ctx: ToolContext) -> None:
+    await WriteFileTool().run(WriteFileInput(path="a.py", content="value = 1\n"), ctx)
+    corrupted = "value = 1  # replaced\\n" * 30
+    with pytest.raises(ToolError) as exc:
+        await EditFileTool().run(EditFileInput(path="a.py", old_string="value = 1", new_string=corrupted), ctx)
+    assert exc.value.code == "SUSPECTED_ESCAPED_NEWLINES"
+    read_out = await ReadFileTool().run(ReadFileInput(path="a.py"), ctx)
+    assert read_out.content == "value = 1\n"  # untouched
+
+
 async def test_edit_file_replaces_unique_match(ctx: ToolContext) -> None:
     await WriteFileTool().run(WriteFileInput(path="a.py", content="value = 1\n"), ctx)
     out = await EditFileTool().run(

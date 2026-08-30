@@ -1,12 +1,18 @@
 "use client";
 
 import { useState } from "react";
-import type { RuntimeStatus, TestResultSummary } from "@/lib/types";
+import type { ArtifactSummary, RuntimeStatus, TestResultSummary } from "@/lib/types";
 import { EmptyState } from "@/components/EmptyState";
 import { ExternalLinkIcon } from "@/components/icons";
 import { cn } from "@/lib/cn";
 import { api } from "@/lib/api";
 import { useExecutionRuntime } from "@/hooks/useExecutions";
+
+const VISUAL_LABEL: Record<string, string> = {
+  browser: "Verified in a real browser",
+  unavailable: "Browser verification unavailable",
+  none: "Not visually verified",
+};
 
 const STATUS_LABEL: Record<string, string> = {
   starting: "Starting",
@@ -29,9 +35,11 @@ const STATUS_DOT: Record<string, string> = {
 export function RuntimePanel({
   executionId,
   testResults,
+  screenshotArtifact,
 }: {
   executionId: string;
   testResults: TestResultSummary | null;
+  screenshotArtifact?: ArtifactSummary | null;
 }) {
   const hasRuntime = Boolean(testResults?.runtime_status);
   const live = useExecutionRuntime(executionId, hasRuntime);
@@ -75,6 +83,49 @@ export function RuntimePanel({
       ) : null}
 
       {data?.detail ? <p className="text-sm leading-relaxed text-ivory-faint">{data.detail}</p> : null}
+
+      {testResults?.visual_verification_kind && testResults.visual_verification_kind !== "none" ? (
+        <div className="flex flex-col gap-2 rounded-lg border border-line px-3 py-2.5">
+          <div className="flex items-center gap-2">
+            <span
+              className={cn(
+                "h-2 w-2 rounded-full",
+                testResults.visual_verification_kind === "browser"
+                  ? testResults.visual_ok
+                    ? "bg-status-success"
+                    : "bg-status-error"
+                  : "bg-ivory-faint"
+              )}
+            />
+            <p className="text-xs uppercase tracking-widest2 text-ivory-faint">
+              {VISUAL_LABEL[testResults.visual_verification_kind] ?? testResults.visual_verification_kind}
+            </p>
+          </div>
+          {testResults.visual_reason ? (
+            <p className="text-sm leading-relaxed text-ivory-dim">{testResults.visual_reason}</p>
+          ) : null}
+          {testResults.console_errors.length > 0 ? (
+            <p className="text-xs leading-relaxed text-status-error">
+              {testResults.console_errors.length} browser console error(s) observed.
+            </p>
+          ) : null}
+          {screenshotArtifact ? (
+            <a
+              href={api.getArtifactContentUrl(executionId, screenshotArtifact.id)}
+              target="_blank"
+              rel="noreferrer"
+              className="mt-1 block overflow-hidden rounded-md border border-line-strong"
+            >
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={api.getArtifactContentUrl(executionId, screenshotArtifact.id)}
+                alt="Screenshot of the running application, captured during verification"
+                className="w-full"
+              />
+            </a>
+          ) : null}
+        </div>
+      ) : null}
 
       <div className="flex flex-wrap gap-2">
         {canOpen ? (

@@ -35,6 +35,12 @@ class GitDiffInput(BaseModel):
 class GitDiffOutput(BaseModel):
     diff: str
     truncated: bool
+    # False means the workspace genuinely isn't a Git repository — a real,
+    # common, non-error outcome for a freshly generated project (see
+    # agents.reviewer, which reads actual file content directly instead in
+    # that case), not a failure of the diff operation itself. `diff` is
+    # always "" when this is False.
+    is_git_repository: bool = True
 
 
 class GitBranchInput(BaseModel):

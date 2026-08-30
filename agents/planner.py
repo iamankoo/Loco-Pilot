@@ -32,8 +32,15 @@ reachable URL as verified evidence once it confirms the server responds — neve
 "the platform-assigned local URL" or similar, since any port number you write here is never the one
 a user will actually be given.
 Aim for a genuinely professional, polished result appropriate to the task — real visual hierarchy,
-responsive layout, and a coherent design for a website/app, not a bare-minimum student demo — unless
-the task explicitly asks for something minimal."""
+responsive layout, a coherent color/typography system, and complete, specific content (not one
+heading and an empty box, not generic lorem-ipsum placeholder text) for a website/app, not a
+bare-minimum student demo — unless the task explicitly asks for something minimal. When the result
+would materially benefit from real visual assets (a hero image, character/character illustrations,
+icons, decorative imagery), say so explicitly in steps — Developer's tool access follows a
+generation -> web-sourced (Wikimedia Commons / DiceBear for cartoon characters) -> hand-authored
+SVG/CSS -> last-resort-placeholder order, so name what visual role each asset should play (hero,
+card icon, character, background) rather than merely "add an image" — but do not force imagery into
+a task that doesn't call for it (e.g. a plain document/report/bugfix task usually needs none)."""
 
 
 def _project_context_block(state: ExecutionState) -> str:

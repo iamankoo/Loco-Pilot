@@ -93,6 +93,26 @@ class TestResult(BaseModel):
     # but never confirmed reachable.
     runtime_url: str | None = None
     runtime_status: Literal["starting", "running", "verification_failed", "start_failed", "stopped"] | None = None
+    # Real browser (Playwright/Chromium) inspection of `runtime_url`, when
+    # one was reachable — "none" whenever no runtime existed to inspect at
+    # all (nothing to distinguish from a real check that ran), "unavailable"
+    # when a runtime WAS reachable but the browser capability itself
+    # couldn't run (Playwright/Chromium missing in this deployment — an
+    # honest gap, never silently treated as passing), "browser" when a real
+    # headless-Chromium page load actually happened. Reviewer/the UI must
+    # never claim visual verification occurred unless this is "browser".
+    visual_verification_kind: Literal["browser", "unavailable", "none"] = "none"
+    # Only meaningful when visual_verification_kind == "browser": whether
+    # the real rendered page showed genuine content (not blank, no broken
+    # local images) — never set from an agent's own claim.
+    visual_ok: bool | None = None
+    visual_reason: str = ""
+    console_errors: list[str] = Field(default_factory=list)
+    # Workspace-relative path to a real screenshot Playwright captured of
+    # the running application, or None if none was captured. Recorded as a
+    # genuine execution artifact (see agents.graph's finalize node) so the
+    # UI can show real proof of what was built, not merely a claim.
+    screenshot_path: str | None = None
 
 
 class DebugResult(BaseModel):
@@ -121,6 +141,9 @@ class DebugResult(BaseModel):
         # binary content for its type, or the runtime process never became
         # reachable on its published port.
         "static_asset_error", "runtime_start_error",
+        # Phase 8 addition: a runtime rendered but a real browser check found
+        # it visibly blank/broken (see agents.failure_classification).
+        "visual_quality_error",
     ] = "unknown"
     # Derived from the real tool calls this turn actually made (read_file/
     # file_exists), never from the model's self-report of what it looked at.

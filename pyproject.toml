@@ -36,6 +36,14 @@ dev = [
     "pytest>=8.3,<9.0",
     "pytest-asyncio>=0.24,<1.0",
 ]
+# Real browser (headless Chromium) verification of a running web/UI runtime
+# — see analysis/browser_verification.py. Deliberately optional: it
+# degrades gracefully (agents.tester reports "unavailable", never a fake
+# pass) when unused, and the browser binary itself is a separate download
+# (`playwright install chromium`) beyond what `pip install` alone provides.
+browser = [
+    "playwright>=1.47,<2.0",
+]
 
 [build-system]
 requires = ["hatchling"]

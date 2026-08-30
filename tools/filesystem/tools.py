@@ -18,6 +18,29 @@ from pathlib import Path
 
 from tools.base import Permission, Tool, ToolContext, ToolError
 from tools.diffing import compute_diff
+
+# A distinct corruption class from the binary/base64 one (tools/binary_output.py,
+# analysis/static_site.py's validate_binary_asset): some models double-escape
+# newlines in a large multi-line tool-call string argument, so the file ends
+# up containing the literal two-character sequence `\n` (backslash, letter n)
+# instead of a real line break — CSS/JS/HTML source written this way still
+# "exists" and often still contains readable text, but browsers/interpreters
+# see one long malformed line and silently fail to apply most of it (e.g. a
+# stylesheet where every selector is glued to the next by a stray `\n`
+# token). A real, non-trivially-long text write with zero actual newlines but
+# several literal `\n` sequences is a near-certain sign of this bug — genuine
+# minified single-line source doesn't insert literal backslash-n placeholders,
+# it just omits line breaks entirely.
+_ESCAPED_NEWLINE_MIN_BYTES = 500
+_ESCAPED_NEWLINE_MIN_OCCURRENCES = 5
+
+
+def _looks_like_escaped_newline_corruption(text: str) -> bool:
+    if len(text.encode("utf-8")) < _ESCAPED_NEWLINE_MIN_BYTES:
+        return False
+    if "\n" in text:
+        return False
+    return text.count("\\n") >= _ESCAPED_NEWLINE_MIN_OCCURRENCES
 from tools.filesystem.schemas import (
     DEFAULT_EXCLUDED_DIRS,
     MAX_SEARCH_FILE_BYTES,
@@ -210,6 +233,13 @@ class WriteFileTool(Tool[WriteFileInput, WriteFileOutput]):
             except (binascii.Error, ValueError) as exc:
                 raise ToolError(f"Invalid base64 content: {exc}", code="INVALID_BASE64") from exc
         else:
+            if _looks_like_escaped_newline_corruption(tool_input.content):
+                raise ToolError(
+                    "This content looks corrupted: it has no real line breaks but contains multiple "
+                    "literal '\\n' two-character sequences — write actual newline characters, not the "
+                    "escaped '\\n' text, or the file will fail to parse/render correctly.",
+                    code="SUSPECTED_ESCAPED_NEWLINES",
+                )
             content_bytes = tool_input.content.encode("utf-8")
 
         if len(content_bytes) > MAX_WRITE_BYTES:
@@ -304,6 +334,14 @@ class EditFileTool(Tool[EditFileInput, EditFileOutput]):
             raise ToolError(
                 f"old_string is not unique ({occurrences} matches); provide more surrounding context.",
                 code="MULTIPLE_MATCHES",
+            )
+
+        if _looks_like_escaped_newline_corruption(tool_input.new_string):
+            raise ToolError(
+                "new_string looks corrupted: it has no real line breaks but contains multiple literal "
+                "'\\n' two-character sequences — write actual newline characters, not the escaped '\\n' "
+                "text, or the file will fail to parse/render correctly.",
+                code="SUSPECTED_ESCAPED_NEWLINES",
             )
 
         updated = original.replace(tool_input.old_string, tool_input.new_string, 1)

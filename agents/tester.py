@@ -29,11 +29,18 @@ import re
 from agents.base import BaseAgent
 from agents.schemas import TestResult
 from agents.state import ExecutionState
+from analysis.browser_verification import verify_in_browser
 from analysis.document_artifact import verify_document_artifacts
 from analysis.static_site import verify_static_site
 from analysis.test_selection import select_test_targets
 from backend.app.services import runtime_service
 from tools.workspace import Workspace, WorkspaceError
+
+# Where a real Playwright screenshot of a verified runtime is saved, inside
+# the workspace so it travels with the project and can be recorded as a
+# genuine execution artifact — a dot-prefixed platform directory, clearly
+# distinct from anything the Developer/Planner would name.
+_SCREENSHOT_RELATIVE_PATH = ".locopilot/verification-screenshot.png"
 
 _TEST_EXECUTION_TOOL_NAMES = ("run_tests", "execute_terminal_command")
 
@@ -433,8 +440,32 @@ class TesterAgent(BaseAgent):
                 errors.append(f"Runtime server failed to start or never became reachable: {record.detail}")
 
         assets_ok = not verification.missing_assets and not verification.invalid_assets
+
+        visual_verification_kind: str = "none"
+        visual_ok: bool | None = None
+        visual_reason = ""
+        console_errors: list[str] = []
+        screenshot_path: str | None = None
+        if runtime_status == "running" and runtime_url:
+            browser_result = await verify_in_browser(
+                runtime_url, screenshot_file=workspace.root / _SCREENSHOT_RELATIVE_PATH
+            )
+            if browser_result.available:
+                visual_verification_kind = "browser"
+                visual_ok = browser_result.ok
+                visual_reason = browser_result.reason
+                console_errors = browser_result.console_errors
+                if browser_result.screenshot_path:
+                    screenshot_path = _SCREENSHOT_RELATIVE_PATH
+                if not browser_result.ok:
+                    errors.append(f"Browser verification: {browser_result.reason}")
+            else:
+                visual_verification_kind = "unavailable"
+                visual_reason = browser_result.reason
+
         runtime_ok = runtime_status in (None, "running")
-        status = "passed" if assets_ok and runtime_ok else "failed"
+        visual_gate_ok = visual_verification_kind != "browser" or visual_ok is True
+        status = "passed" if assets_ok and runtime_ok and visual_gate_ok else "failed"
 
         summary = (
             f"Static site check: entry point {verification.entry_path}, "
@@ -444,6 +475,10 @@ class TesterAgent(BaseAgent):
             summary += f", runtime verified reachable at {runtime_url}"
         elif runtime_status is not None:
             summary += f", runtime {runtime_status}"
+        if visual_verification_kind == "browser":
+            summary += f", browser verification {'passed' if visual_ok else 'failed'} ({visual_reason})"
+        elif visual_verification_kind == "unavailable":
+            summary += f", browser verification unavailable ({visual_reason})"
         summary += "." if status == "passed" else " — see errors."
 
         test_result = TestResult(
@@ -455,6 +490,11 @@ class TesterAgent(BaseAgent):
             verification_kind="static_site",
             runtime_url=runtime_url,
             runtime_status=runtime_status,
+            visual_verification_kind=visual_verification_kind,
+            visual_ok=visual_ok,
+            visual_reason=visual_reason,
+            console_errors=console_errors,
+            screenshot_path=screenshot_path,
         )
         update = {
             "test_results": test_result,

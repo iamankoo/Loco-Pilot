@@ -76,10 +76,16 @@ async def test_git_status_rejects_non_git_workspace(tmp_workspace: Workspace) ->
         await GitStatusTool().run(GitStatusInput(), ctx)
 
 
-async def test_git_diff_rejects_non_git_workspace(tmp_workspace: Workspace) -> None:
+async def test_git_diff_reports_non_git_workspace_as_a_clean_result_not_an_error(tmp_workspace: Workspace) -> None:
+    """A generated workspace legitimately not being a Git repository is a
+    normal, common outcome (see agents.reviewer, which reads real file
+    content directly in that case) — not a tool failure to raise/log as an
+    error. git_status/git_branch/git_create_branch are unaffected: those
+    actions genuinely cannot proceed at all without a repository."""
     ctx = ToolContext(workspace=tmp_workspace)
-    with pytest.raises(ToolError):
-        await GitDiffTool().run(GitDiffInput(), ctx)
+    output = await GitDiffTool().run(GitDiffInput(), ctx)
+    assert output.is_git_repository is False
+    assert output.diff == ""
 
 
 def test_no_git_tool_exposes_a_raw_command_field() -> None:

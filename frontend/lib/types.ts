@@ -44,6 +44,11 @@ export interface TestResultSummary {
   verification_kind: "automated_tests" | "static_site" | "none";
   runtime_url: string | null;
   runtime_status: "starting" | "running" | "verification_failed" | "start_failed" | "stopped" | null;
+  visual_verification_kind: "browser" | "unavailable" | "none";
+  visual_ok: boolean | null;
+  visual_reason: string;
+  console_errors: string[];
+  screenshot_path: string | null;
 }
 
 export interface RuntimeStatus {

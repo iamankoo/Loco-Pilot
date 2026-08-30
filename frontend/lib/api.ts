@@ -16,7 +16,7 @@ import type {
   WorkspaceListResponse,
 } from "./types";
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
+export const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
 
 export class ApiError extends Error {
   status: number;
@@ -119,6 +119,9 @@ export const api = {
 
   listExecutionArtifacts: (executionId: string) =>
     request<ArtifactSummary[]>(`/api/v1/executions/${executionId}/artifacts`),
+
+  getArtifactContentUrl: (executionId: string, artifactId: string) =>
+    `${API_BASE_URL}/api/v1/executions/${executionId}/artifacts/${artifactId}/content`,
 
   createExecution: (payload: CreateExecutionRequest) =>
     request<ExecutionRecord>(`/api/v1/executions`, { method: "POST", body: JSON.stringify(payload) }),

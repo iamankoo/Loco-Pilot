@@ -47,6 +47,24 @@ def test_debug_result_rejects_invalid_confidence() -> None:
         DebugResult(root_cause="x", proposed_fix="y", confidence="certain")
 
 
+def test_debug_result_accepts_visual_quality_error_failure_class() -> None:
+    result = DebugResult(
+        root_cause="x", proposed_fix="y", confidence="medium", failure_class="visual_quality_error"
+    )
+    assert result.failure_class == "visual_quality_error"
+
+
+def test_test_result_visual_verification_fields_default_to_honest_none() -> None:
+    """A TestResult built without any visual-verification-specific
+    argument (e.g. a conventional pytest/Jest run) must never silently
+    imply a browser check happened."""
+    result = TestResult(status="passed", summary="3 passed")
+    assert result.visual_verification_kind == "none"
+    assert result.visual_ok is None
+    assert result.console_errors == []
+    assert result.screenshot_path is None
+
+
 def test_review_result_rejects_invalid_verdict() -> None:
     with pytest.raises(ValidationError):
         ReviewResult(verdict="looks_fine", summary="x")

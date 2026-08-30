@@ -66,6 +66,7 @@ def build_default_registry() -> ToolRegistry:
     for agent use. As of Phase 1.4, `execute_terminal_command` IS
     registered, backed by the real Docker sandbox (`execution.docker`).
     """
+    from tools.assets.tools import DownloadWebAssetTool, SearchWebImagesTool
     from tools.documents.tools import (
         ConvertFileTool,
         GenerateCsvTool,
@@ -113,6 +114,8 @@ def build_default_registry() -> ToolRegistry:
         GenerateCsvTool(),
         ConvertFileTool(),
         GenerateImageTool(),
+        SearchWebImagesTool(),
+        DownloadWebAssetTool(),
     ):
         registry.register(tool)
     return registry

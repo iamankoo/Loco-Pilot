@@ -67,9 +67,13 @@ async def _run_git(workspace: Workspace, args: list[str]) -> tuple[int, str, str
     )
 
 
-async def _ensure_git_repo(workspace: Workspace) -> None:
+async def _is_git_repo(workspace: Workspace) -> bool:
     code, stdout, _ = await _run_git(workspace, ["rev-parse", "--is-inside-work-tree"])
-    if code != 0 or stdout.strip() != "true":
+    return code == 0 and stdout.strip() == "true"
+
+
+async def _ensure_git_repo(workspace: Workspace) -> None:
+    if not await _is_git_repo(workspace):
         raise ToolError(f"Workspace is not a Git repository: {workspace.root}", code="NOT_A_GIT_REPOSITORY")
 
 
@@ -124,7 +128,15 @@ class GitDiffTool(Tool[GitDiffInput, GitDiffOutput]):
     output_model = GitDiffOutput
 
     async def run(self, tool_input: GitDiffInput, context: ToolContext) -> GitDiffOutput:
-        await _ensure_git_repo(context.workspace)
+        # A generated workspace legitimately not being a Git repository is a
+        # normal, common outcome — not a tool failure — so this reports it
+        # as a clean success with is_git_repository=False rather than
+        # raising an "error" a caller/log would otherwise have to explain
+        # away. Contrast with git_status/git_branch/git_create_branch (via
+        # _ensure_git_repo), where the action genuinely cannot proceed at
+        # all without a repository.
+        if not await _is_git_repo(context.workspace):
+            return GitDiffOutput(diff="", truncated=False, is_git_repository=False)
 
         args = ["diff"]
         if tool_input.staged:

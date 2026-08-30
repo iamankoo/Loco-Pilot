@@ -14,8 +14,10 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
+from backend.app.core.config import get_settings
 from backend.app.core.image.base import ImageGenerationError
 from backend.app.core.image.factory import get_image_provider
+from tools.assets.provenance import new_entry, record_asset
 from tools.base import Permission, Tool, ToolContext, ToolError
 from tools.binary_output import resolve_output_path, verify_written
 
@@ -72,4 +74,16 @@ class GenerateImageTool(Tool[GenerateImageInput, GenerateImageOutput]):
             raise ToolError(f"Failed to write generated image: {exc}") from exc
 
         bytes_written = verify_written(target, tool_input.path, max_bytes=MAX_IMAGE_BYTES)
+
+        record_asset(
+            context.workspace,
+            new_entry(
+                local_path=tool_input.path,
+                asset_type="image",
+                acquisition_method="image_generation",
+                source_provider=get_settings().image_provider or "unknown",
+                attribution=f"Generated from prompt: {tool_input.prompt}",
+            ),
+        )
+
         return GenerateImageOutput(path=tool_input.path, bytes_written=bytes_written, created=created)

@@ -41,6 +41,11 @@ class TestResultSummary(BaseModel):
     verification_kind: str = "automated_tests"
     runtime_url: str | None = None
     runtime_status: str | None = None
+    visual_verification_kind: str = "none"
+    visual_ok: bool | None = None
+    visual_reason: str = ""
+    console_errors: list[str] = []
+    screenshot_path: str | None = None
 
 
 class ReviewResultSummary(BaseModel):

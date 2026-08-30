@@ -61,6 +61,16 @@ _PATTERNS: tuple[tuple[FailureClass, re.Pattern], ...] = (
         "runtime_start_error",
         re.compile(r"runtime (container|server) (failed to start|never became reachable)", re.IGNORECASE),
     ),
+    # Phase 8: agents.tester's real browser (Playwright) verification path
+    # — the page loaded and the runtime is genuinely reachable, but what a
+    # real browser actually rendered was blank, broken, or otherwise
+    # visibly wrong. Distinct from static_asset_error (a reference that
+    # can't even resolve on disk) because this is about what actually
+    # rendered, not what merely exists.
+    (
+        "visual_quality_error",
+        re.compile(r"Browser verification:", re.IGNORECASE),
+    ),
 )
 
 

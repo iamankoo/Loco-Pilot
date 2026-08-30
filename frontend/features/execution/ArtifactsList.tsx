@@ -1,8 +1,15 @@
 import type { ArtifactSummary } from "@/lib/types";
 import { EmptyState } from "@/components/EmptyState";
 import { formatTimestamp } from "@/lib/format";
+import { api } from "@/lib/api";
 
-export function ArtifactsList({ artifacts }: { artifacts: ArtifactSummary[] }) {
+export function ArtifactsList({
+  executionId,
+  artifacts,
+}: {
+  executionId: string;
+  artifacts: ArtifactSummary[];
+}) {
   if (artifacts.length === 0) {
     return <EmptyState title="No artifacts" description="Build outputs and generated files will appear here." />;
   }
@@ -17,6 +24,14 @@ export function ArtifactsList({ artifacts }: { artifacts: ArtifactSummary[] }) {
               {artifact.artifact_type} · {formatTimestamp(artifact.created_at)}
             </p>
           </div>
+          <a
+            href={api.getArtifactContentUrl(executionId, artifact.id)}
+            target="_blank"
+            rel="noreferrer"
+            className="shrink-0 text-sm text-gold hover:underline"
+          >
+            View
+          </a>
         </li>
       ))}
     </ul>

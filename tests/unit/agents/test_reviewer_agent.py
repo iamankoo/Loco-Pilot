@@ -188,8 +188,11 @@ async def test_reviewer_reads_actual_file_contents_when_git_diff_unavailable() -
         allowed={"git_diff", "read_file"},
         responses={
             "git_diff": ToolExecutionResult(
-                tool_name="git_diff", status="error", output=None,
-                error="Workspace is not a Git repository: /tmp/x", error_code="NOT_A_GIT_REPOSITORY", duration_ms=1,
+                # Matches the real GitDiffTool: a non-Git workspace is a
+                # clean success with is_git_repository=False, not an error.
+                tool_name="git_diff", status="success",
+                output={"diff": "", "truncated": False, "is_git_repository": False},
+                error=None, duration_ms=1,
             ),
             "read_file": ToolExecutionResult(
                 tool_name="read_file", status="success",
@@ -209,6 +212,120 @@ async def test_reviewer_reads_actual_file_contents_when_git_diff_unavailable() -
     _, user_prompt, _ = llm.calls[0]
     assert "Real Cartoon Site" in user_prompt
     assert "not a Git repository" in user_prompt.lower() or "workspace is not a git repository" in user_prompt.lower()
+
+
+async def test_reviewer_still_reads_files_when_git_diff_tool_call_genuinely_errors() -> None:
+    """Distinct from the non-Git-workspace case above: a real tool-level
+    failure (not merely "no repository here") is reported honestly too,
+    and Reviewer still falls back to real file content rather than being
+    left with no evidence at all."""
+    review = ReviewResult(verdict="approved", summary="ok")
+    llm = FakeStructuredLLMClient({"ReviewResult": review})
+    tools = FakeToolRunner(
+        allowed={"git_diff", "read_file"},
+        responses={
+            "git_diff": ToolExecutionResult(
+                tool_name="git_diff", status="error", output=None, error="git executable not found on PATH.", duration_ms=1,
+            ),
+            "read_file": ToolExecutionResult(
+                tool_name="read_file", status="success",
+                output={"content": "print('hi')", "truncated": False}, error=None, duration_ms=1,
+            ),
+        },
+    )
+    state = _state().model_copy(
+        update={"files_changed": [FileChange(path="main.py", change_type="created", detail="write_file applied")]}
+    )
+    agent = ReviewerAgent(llm_client=llm, tools=tools)
+    await agent.run(state)
+
+    _, user_prompt, _ = llm.calls[0]
+    assert "git executable not found" in user_prompt
+    assert "print('hi')" in user_prompt
+
+
+async def test_reviewer_surfaces_real_browser_verification_evidence() -> None:
+    """Phase 8: when Tester's real browser check ran, Reviewer must see the
+    actual outcome (pass/fail, reason, console errors) as evidence — never
+    treat a technically-reachable-but-visibly-broken page as fine."""
+    review = ReviewResult(verdict="changes_required", summary="page renders blank")
+    llm = FakeStructuredLLMClient({"ReviewResult": review})
+    tools = FakeToolRunner(allowed={"git_diff", "read_file"})
+
+    state = _state().model_copy(
+        update={
+            "test_results": TestResult(
+                status="failed",
+                summary="Static site check — see errors.",
+                verification_kind="static_site",
+                runtime_url="http://127.0.0.1:54321",
+                runtime_status="running",
+                visual_verification_kind="browser",
+                visual_ok=False,
+                visual_reason="Page appears blank or has too little visible text.",
+                console_errors=["Uncaught TypeError: x is not a function"],
+                screenshot_path=".locopilot/verification-screenshot.png",
+            )
+        }
+    )
+    agent = ReviewerAgent(llm_client=llm, tools=tools)
+    await agent.run(state)
+
+    _, user_prompt, _ = llm.calls[0]
+    assert "FAILED" in user_prompt
+    assert "Page appears blank" in user_prompt
+    assert "Uncaught TypeError" in user_prompt
+    assert "screenshot" in user_prompt.lower()
+
+
+async def test_reviewer_discloses_unavailable_visual_verification_honestly() -> None:
+    """Section 11: an unavailable capability must be disclosed, not
+    silently treated as either a pass or a penalty."""
+    review = ReviewResult(verdict="approved", summary="ok")
+    llm = FakeStructuredLLMClient({"ReviewResult": review})
+    tools = FakeToolRunner(allowed={"git_diff", "read_file"})
+
+    state = _state().model_copy(
+        update={
+            "test_results": TestResult(
+                status="passed",
+                summary="Static site check passed.",
+                verification_kind="static_site",
+                runtime_url="http://127.0.0.1:54321",
+                runtime_status="running",
+                visual_verification_kind="unavailable",
+                visual_reason="Playwright is not installed in this deployment; browser verification is unavailable.",
+            )
+        }
+    )
+    agent = ReviewerAgent(llm_client=llm, tools=tools)
+    await agent.run(state)
+
+    _, user_prompt, _ = llm.calls[0]
+    assert "UNAVAILABLE" in user_prompt
+    assert "honest capability gap" in user_prompt
+
+
+async def test_reviewer_includes_asset_manifest_when_present() -> None:
+    review = ReviewResult(verdict="approved", summary="ok")
+    llm = FakeStructuredLLMClient({"ReviewResult": review})
+    tools = FakeToolRunner(
+        allowed={"git_diff", "read_file"},
+        responses={
+            "read_file": ToolExecutionResult(
+                tool_name="read_file", status="success",
+                output={"content": '[{"local_path": "assets/hero.svg", "source_provider": "dicebear"}]', "truncated": False},
+                error=None, duration_ms=1,
+            ),
+        },
+    )
+    agent = ReviewerAgent(llm_client=llm, tools=tools)
+    await agent.run(_state())
+
+    assert ("read_file", {"path": "asset-manifest.json", "max_bytes": 4000}) in tools.calls
+    _, user_prompt, _ = llm.calls[0]
+    assert "asset-manifest.json" in user_prompt
+    assert "dicebear" in user_prompt
 
 
 async def test_reviewer_never_calls_a_write_tool() -> None:

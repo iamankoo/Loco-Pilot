@@ -11,10 +11,12 @@ or fabricates execution state.
 
 from __future__ import annotations
 
+import mimetypes
 import uuid
 from datetime import datetime
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -45,6 +47,7 @@ from backend.app.services.execution_service import (
 )
 from backend.app.services import runtime_service
 from backend.app.services.workspace_discovery import discover_or_provision_workspace
+from tools.workspace import Workspace, WorkspaceError
 
 router = APIRouter(prefix="/executions", tags=["executions"])
 
@@ -244,6 +247,42 @@ async def list_execution_artifacts_endpoint(
         )
         for a in artifacts
     ]
+
+
+@router.get("/{execution_id}/artifacts/{artifact_id}/content")
+async def get_execution_artifact_content_endpoint(
+    execution_id: uuid.UUID, artifact_id: uuid.UUID, db: AsyncSession = Depends(get_db)
+) -> FileResponse:
+    """Serves an artifact's real file bytes (e.g. a verification screenshot)
+    so the frontend can render it directly — e.g. `<img src=".../content">`
+    — rather than merely listing its path. Resolved strictly through the
+    project's own `Workspace` boundary (the same guard every tool call
+    goes through), never a raw filesystem join of user/DB-controlled path
+    segments, and 404s (not a raw filesystem error) for anything missing."""
+    execution = await get_execution(db, execution_id)
+    if execution is None:
+        raise HTTPException(404, "Execution not found.")
+
+    project = await get_project(db, execution.project_id)
+    if project is None or not project.workspace_path:
+        raise HTTPException(404, "Project workspace is not available.")
+
+    artifacts = await list_artifacts_for_execution(db, execution_id)
+    artifact = next((a for a in artifacts if a.id == artifact_id), None)
+    if artifact is None:
+        raise HTTPException(404, "Artifact not found.")
+
+    try:
+        workspace = Workspace.at(project.workspace_path)
+        file_path = workspace.resolve(artifact.path)
+    except WorkspaceError as exc:
+        raise HTTPException(404, "Artifact file is not accessible.") from exc
+
+    if not file_path.is_file():
+        raise HTTPException(404, "Artifact file no longer exists on disk.")
+
+    media_type = mimetypes.guess_type(file_path.name)[0] or "application/octet-stream"
+    return FileResponse(path=file_path, media_type=media_type, filename=file_path.name)
 
 
 @router.get("/{execution_id}/report")

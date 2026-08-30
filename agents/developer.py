@@ -28,8 +28,29 @@ Prefer edit_file for a targeted change to an existing file (old_string must matc
 content exactly); use write_file for a brand-new file or a deliberate full-file replacement. For any
 BINARY asset (an actual image file: PNG/JPEG/GIF/WebP/ICO), write_file's encoding="base64" parameter
 writes real decoded bytes — encoding="text" (the default) writes literal text, so writing base64 as
-text produces a corrupt, unopenable file. Prefer an inline SVG or CSS-only visual (no write_file call
-needed at all) over a raster image whenever a simple vector/CSS treatment achieves the same result.
+text produces a corrupt, unopenable file.
+VISUAL ASSETS — use this order, stopping at the first one that genuinely fits: (1) an inline SVG or
+CSS-only visual you author yourself — the best choice whenever it can look genuinely good, no tool
+call needed at all; (2) generate_image, when a real photographic/illustrated raster is needed and
+the tool is actually configured; (3) search_web_images + download_web_asset (Wikimedia Commons for
+real photos/illustrations with genuine licenses, or DiceBear — api.dicebear.com — for real,
+free, deterministic cartoon character/avatar SVGs, no key needed) when generation is unavailable or
+unsuitable; (4) only as an absolute last resort, a clearly-labeled simple local placeholder — never
+present a plain colored box as if it were finished content. Never invent an image URL yourself —
+only use a URL search_web_images actually returned, or a DiceBear URL you construct in the exact
+documented pattern. A downloaded/generated asset is not finished until you actually reference it
+from the real markup/styles that use it — for HTML, that always means `<img src="path/to/file.svg">`
+(or a CSS `background-image`); `<svg src="...">` is invalid markup that silently renders nothing
+(SVG has no `src` attribute) — only use a bare `<svg>...</svg>` for markup you write inline yourself.
+PROFESSIONAL QUALITY BAR — a technically valid result (files exist, HTML parses, CSS/JS present, a
+server starts) is the baseline, not completion. For any user-facing deliverable, genuinely deliver:
+clear visual hierarchy, a coherent color system (not default black-on-white or a single flat color
+fill), real typography choices, deliberate spacing/layout (not cramped or uselessly empty), a
+complete set of the sections/elements the task implies (a "landing page" needs a real hero,
+navigation, and distinct content sections — not one heading and an empty box), working interactions
+where implied, responsive behavior, and content that is specific to the actual request rather than
+generic lorem-ipsum-style placeholder text. Keep iterating against the plan and this bar before
+declaring the summary done — stopping the moment something merely "exists" is not the goal.
 delete_file and move_file are available when the plan genuinely calls for removing or renaming a
 file — deleting a non-empty directory requires recursive=True, and move_file never silently
 overwrites an existing destination unless overwrite=True. For a requested document/spreadsheet
@@ -57,10 +78,11 @@ _WRITE_TOOL_NAMES = ("write_file", "edit_file", "delete_file", "move_file")
 # `target_path` (convert_file), never an in-place edit of an existing one.
 _DOCUMENT_TOOL_NAMES = (
     "generate_pdf", "generate_docx", "generate_xlsx", "generate_csv", "convert_file", "generate_image",
+    "download_web_asset",
 )
 _DOCUMENT_PATH_FIELD = {
     "generate_pdf": "path", "generate_docx": "path", "generate_xlsx": "path", "generate_csv": "path",
-    "convert_file": "target_path", "generate_image": "path",
+    "convert_file": "target_path", "generate_image": "path", "download_web_asset": "path",
 }
 
 

@@ -44,6 +44,7 @@ from backend.app.core.logging import bind_execution_context, get_logger
 from backend.app.db.models.agent_step import AgentStepStatus
 from backend.app.db.repositories.agent_steps import complete_agent_step, create_agent_step
 from backend.app.security.secret_scrubber import scrub_secrets
+from backend.app.db.repositories.artifacts import create_artifact
 from backend.app.services.artifact_service import collect_artifacts
 from backend.app.services.cancellation import is_cancelled
 from backend.app.services.tool_execution import BoundToolRunner
@@ -357,6 +358,32 @@ def make_finalize_node(deps: GraphDependencies) -> Callable[[ExecutionState], "o
                 artifact_count = len(artifacts)
             except Exception as exc:  # noqa: BLE001 - artifact collection must not fail a finished execution
                 logger.warning("artifact_collection_failed", error=str(exc))
+
+        # Recorded explicitly (not via `collect_artifacts`' glob mechanism,
+        # since a Planner-authored `expected_artifact_glob` was never meant
+        # to anticipate platform-generated verification evidence) whenever
+        # Tester's real browser check actually captured one — regardless of
+        # final_status, since a screenshot is genuine proof of what
+        # happened and is useful evidence even when review still requires
+        # changes.
+        if deps.db is not None and state.test_results is not None and state.test_results.screenshot_path:
+            try:
+                workspace = Workspace.at(state.workspace_root)
+                screenshot_file = workspace.root / state.test_results.screenshot_path
+                if screenshot_file.is_file():
+                    await create_artifact(
+                        deps.db,
+                        execution_id=uuid.UUID(state.execution_id),
+                        artifact_type="screenshot",
+                        path=state.test_results.screenshot_path,
+                        metadata={
+                            "size_bytes": screenshot_file.stat().st_size,
+                            "visual_ok": state.test_results.visual_ok,
+                        },
+                    )
+                    artifact_count += 1
+            except Exception as exc:  # noqa: BLE001 - artifact recording must not fail a finished execution
+                logger.warning("screenshot_artifact_recording_failed", error=str(exc))
 
         final_result = {
             "status": final_status,

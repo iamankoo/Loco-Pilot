@@ -90,7 +90,11 @@ export default function ExecutionDetailPage() {
 
           {data.test_results?.runtime_status ? (
             <Panel title="Running Locally">
-              <RuntimePanel executionId={data.id} testResults={data.test_results} />
+              <RuntimePanel
+                executionId={data.id}
+                testResults={data.test_results}
+                screenshotArtifact={artifacts.data?.find((a) => a.artifact_type === "screenshot") ?? null}
+              />
             </Panel>
           ) : null}
 
@@ -103,7 +107,11 @@ export default function ExecutionDetailPage() {
           </Panel>
 
           <Panel title={`Artifacts${data.artifact_count > 0 ? ` (${data.artifact_count})` : ""}`}>
-            {artifacts.isLoading ? <SkeletonLines count={2} /> : <ArtifactsList artifacts={artifacts.data ?? []} />}
+            {artifacts.isLoading ? (
+              <SkeletonLines count={2} />
+            ) : (
+              <ArtifactsList executionId={data.id} artifacts={artifacts.data ?? []} />
+            )}
           </Panel>
         </div>
       </div>

@@ -9,8 +9,13 @@ from agents.tester import (
     _task_implies_local_run,
     TesterAgent,
 )
+from analysis.browser_verification import BrowserVerificationResult
 from tests.fakes import FakeToolRunner
 from tools.workspace import Workspace
+
+
+async def _fake_verify_in_browser_ok(url: str, *, screenshot_file=None, timeout_ms=15000) -> BrowserVerificationResult:
+    return BrowserVerificationResult(available=True, ok=True, reason="looks fine", heading_count=1)
 
 
 def _state(workspace: Workspace, *, user_task: str, plan=None) -> ExecutionState:
@@ -62,6 +67,7 @@ async def test_static_site_check_uses_deterministic_default_run_command_when_pla
         return _FakeRuntimeRecord(status="running", detail="HTTP 200")
 
     monkeypatch.setattr("agents.tester.runtime_service.start_runtime", _fake_start_runtime)
+    monkeypatch.setattr("agents.tester.verify_in_browser", _fake_verify_in_browser_ok)
 
     state = _state(tmp_workspace, user_task="Make a cartoon website and run it on local host", plan=None)
     agent = TesterAgent(llm_client=None, tools=FakeToolRunner(allowed={"execute_terminal_command"}))
@@ -75,6 +81,8 @@ async def test_static_site_check_uses_deterministic_default_run_command_when_pla
     assert result.runtime_url == "http://127.0.0.1:54321"
     # Never the LocoPilot backend's own conventional port as the reported URL.
     assert ":8000" not in result.runtime_url
+    assert result.visual_verification_kind == "browser"
+    assert result.visual_ok is True
 
 
 async def test_static_site_check_does_not_start_a_runtime_when_task_does_not_ask_for_one(
@@ -117,6 +125,7 @@ async def test_static_site_check_prefers_plans_own_run_command_when_present(
         return _FakeRuntimeRecord(status="running", detail="HTTP 200")
 
     monkeypatch.setattr("agents.tester.runtime_service.start_runtime", _fake_start_runtime)
+    monkeypatch.setattr("agents.tester.verify_in_browser", _fake_verify_in_browser_ok)
 
     state = _state(tmp_workspace, user_task="run it on local host", plan=plan)
     agent = TesterAgent(llm_client=None, tools=FakeToolRunner(allowed={"execute_terminal_command"}))
