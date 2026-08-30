@@ -54,10 +54,43 @@ _registry: dict[str, RuntimeRecord] = {}
 _lock = asyncio.Lock()
 
 
-def _find_free_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
+_MAX_PORT_PICK_ATTEMPTS = 10
+
+
+def _reserved_ports() -> set[int]:
+    """Ports a generated application's runtime must never be published on,
+    regardless of what the OS's ephemeral-port allocator would otherwise
+    hand out — the LocoPilot backend's own configured port above all
+    (the exact collision that made "http://localhost:8000" resolve to the
+    FastAPI backend instead of a generated static site)."""
+    from backend.app.core.config import get_settings
+
+    settings = get_settings()
+    return {settings.api_port}
+
+
+def _find_free_port(*, avoid: set[int] | None = None) -> int:
+    """Binds to an OS-assigned ephemeral port (never a fixed/predictable
+    number) and retries if it happens to land on a port in `avoid` — belt
+    and suspenders on top of `_reserved_ports()` always being excluded:
+    the OS's own ephemeral range (typically 49152+) essentially never
+    overlaps a well-known low port like 8000 anyway, but a caller-supplied
+    `avoid` set (e.g. a port a sibling runtime just used) is a real,
+    non-negligible collision risk this retry loop actually closes."""
+    excluded = _reserved_ports() | (avoid or set())
+    port = None
+    for _ in range(_MAX_PORT_PICK_ATTEMPTS):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.bind(("127.0.0.1", 0))
+            port = s.getsockname()[1]
+        if port not in excluded:
+            return port
+    # Every attempt collided (astronomically unlikely) — return the last
+    # port found rather than raising; a subsequent real bind failure inside
+    # ManagedRuntime.start() would surface as an honest start_failed status,
+    # never a silent success on the wrong port.
+    logger.warning("runtime_port_pick_exhausted_retries", excluded=sorted(excluded))
+    return port  # type: ignore[return-value]
 
 
 async def start_runtime(
@@ -76,11 +109,14 @@ async def start_runtime(
     or has definitively failed to become reachable. Never raises — every
     outcome (start failure, never-became-reachable, success) is reported
     through the returned record's `status`/`detail`, which is real evidence
-    a caller (Tester) can put directly into a `TestResult`."""
+    a caller (Tester) can put directly into a `TestResult`. The published
+    host port is always freshly, dynamically allocated — never the
+    LocoPilot backend's own port, never a value the LLM proposed."""
     if execution_id in _registry:
         await stop_runtime(execution_id)
 
-    host_port = _find_free_port()
+    in_use_ports = {r.runtime.host_port for r in _registry.values()}
+    host_port = _find_free_port(avoid=in_use_ports)
     runtime = ManagedRuntime(
         workspace, command=command, container_port=container_port, host_port=host_port, image=image
     )

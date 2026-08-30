@@ -37,6 +37,28 @@ from tools.workspace import Workspace, WorkspaceError
 
 _TEST_EXECUTION_TOOL_NAMES = ("run_tests", "execute_terminal_command")
 
+# A static site with no build step has exactly one sane, always-safe way to
+# serve it — this is deliberately NOT left to Planner's own judgment call:
+# an LLM-proposed run_command/run_port is used when both are present (a
+# non-trivial app may genuinely need something else, e.g. `npm start`), but
+# a plain static site whose plan omitted them still gets a real runtime
+# started and verified whenever the task actually asked for one, rather
+# than silently skipping verification because of an LLM reliability gap.
+# The port here is only ever the CONTAINER-internal port — arbitrary and
+# safe, since the actual host-exposed port is always freshly allocated by
+# runtime_service, never this number (see backend.app.services.runtime_service).
+_DEFAULT_STATIC_SITE_RUN_COMMAND = ["python3", "-m", "http.server", "8000"]
+_DEFAULT_STATIC_SITE_RUN_PORT = 8000
+_RUN_INTENT_RE = re.compile(
+    r"\brun\b.{0,20}\b(local\s*host|localhost)\b|\b(local\s*host|localhost)\b.{0,20}\brun\b|"
+    r"\bserve\b|\bstart\b.{0,20}\bserver\b",
+    re.IGNORECASE,
+)
+
+
+def _task_implies_local_run(task: str) -> bool:
+    return bool(_RUN_INTENT_RE.search(task))
+
 # Fallback marker-file detection, used only when no `ProjectContext` is
 # available at all (e.g. TesterAgent exercised directly in a unit test).
 _PROJECT_TEST_COMMANDS: tuple[tuple[str, str, list[str]], ...] = (
@@ -369,12 +391,17 @@ class TesterAgent(BaseAgent):
         file, and — for an image — that file's content is genuinely the
         binary format its extension claims (closes the exact bug class
         where a model writes base64 TEXT to a `.png` path via a text-only
-        write). If the plan specifies `run_command`/`run_port` (the task
-        implied "run it on localhost"), also starts a real, localhost-only
-        runtime and confirms it actually answers HTTP requests before ever
-        calling this "passed" — never from an agent's own claim. Returns
-        None (not a TestResult) if no HTML entry point exists at all, so
-        the caller can try the next project-type check."""
+        write). If the plan specifies `run_command`/`run_port`, or the task
+        text itself implies "run it on localhost" even when the plan
+        omitted them (see `_task_implies_local_run` — Planner's own
+        structured-output reliability for these two fields is not trusted
+        as the sole gate for whether verification happens at all), starts
+        a real, localhost-only runtime on a freshly allocated host port
+        (never the LocoPilot backend's own port) and confirms it actually
+        answers HTTP requests before ever calling this "passed" — never
+        from an agent's own claim. Returns None (not a TestResult) if no
+        HTML entry point exists at all, so the caller can try the next
+        project-type check."""
         hint_paths = list(state.plan.files_likely_involved) if state.plan else []
         verification = verify_static_site(workspace, hint_paths=hint_paths)
 
@@ -388,6 +415,13 @@ class TesterAgent(BaseAgent):
         runtime_status: str | None = None
         run_command = state.plan.run_command if state.plan else None
         run_port = state.plan.run_port if state.plan else None
+        if not (run_command and run_port) and _task_implies_local_run(state.user_task):
+            # Planner didn't (or couldn't reliably) fill run_command/run_port
+            # — the task still explicitly asked for a running local site, so
+            # fall back to the one deterministic, always-safe way to serve a
+            # plain static site rather than silently skipping verification.
+            run_command = _DEFAULT_STATIC_SITE_RUN_COMMAND
+            run_port = _DEFAULT_STATIC_SITE_RUN_PORT
         if run_command and run_port:
             record = await runtime_service.start_runtime(
                 state.execution_id, workspace, command=run_command, container_port=run_port

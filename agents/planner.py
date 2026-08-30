@@ -21,10 +21,16 @@ task below.
 If the task implies the result should actually run somewhere reachable (e.g. "...and run it on
 local host", "...and start the server"), also set run_command (argv, e.g.
 ["python3", "-m", "http.server", "8000"] for a static site, or the project's real dev/start command)
-and run_port (the port that command listens on) — the process this command starts MUST bind
-0.0.0.0, not 127.0.0.1/localhost, or the platform's own port-forwarding cannot reach it (this only
-affects the process's internal bind; the host-side exposure stays localhost-only regardless of what
-you choose here). Leave both unset when the task does not call for a running server.
+and run_port (the port that command listens on INSIDE its own process/container — any reasonable
+number is fine here, e.g. 8000). The process this command starts MUST bind 0.0.0.0, not
+127.0.0.1/localhost, or the platform's own port-forwarding cannot reach it. Leave both unset when
+the task does not call for a running server.
+IMPORTANT: run_port is never the final, user-facing port. The platform always publishes the real
+runtime on its own freshly chosen, LocoPilot-backend-avoiding host port and reports the actual
+reachable URL as verified evidence once it confirms the server responds — never state a specific
+"http://localhost:PORT" yourself in objective/steps/testing_strategy/risks; refer to it only as
+"the platform-assigned local URL" or similar, since any port number you write here is never the one
+a user will actually be given.
 Aim for a genuinely professional, polished result appropriate to the task — real visual hierarchy,
 responsive layout, and a coherent design for a website/app, not a bare-minimum student demo — unless
 the task explicitly asks for something minimal."""
