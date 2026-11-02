@@ -2,12 +2,12 @@ import type { Metadata } from "next";
 import { Fraunces, Inter, JetBrains_Mono } from "next/font/google";
 import { QueryProvider } from "@/lib/query-provider";
 import { TopNav } from "@/components/TopNav";
+import { AccessGate } from "@/components/AccessGate";
 import "./globals.css";
 
 const fraunces = Fraunces({
   subsets: ["latin"],
   variable: "--font-display",
-  weight: ["400", "500", "600"],
   style: ["normal", "italic"],
   display: "swap",
 });
@@ -37,7 +37,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <QueryProvider>
           <div className="relative z-10 flex min-h-screen flex-col">
             <TopNav />
-            <main className="flex-1">{children}</main>
+            <main className="flex-1">
+              <AccessGate>{children}</AccessGate>
+            </main>
           </div>
         </QueryProvider>
       </body>

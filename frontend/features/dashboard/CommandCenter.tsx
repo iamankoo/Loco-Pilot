@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useProjectsList } from "@/hooks/useProjects";
 import { useCreateExecution } from "@/hooks/useExecutionMutations";
 import { useSpeechToText } from "@/hooks/useSpeechToText";
+import { useLocalFolder } from "@/hooks/useLocalFolder";
 import { ApiError, api } from "@/lib/api";
 import { cn } from "@/lib/cn";
 import { MicIcon, PaperclipIcon } from "@/components/icons";
@@ -32,6 +33,7 @@ export function CommandCenter({
   const router = useRouter();
   const projects = useProjectsList({ limit: 100 });
   const createExecution = useCreateExecution();
+  const folder = useLocalFolder();
 
   const [task, setTask] = useState("");
   const [workspaceMode, setWorkspaceMode] = useState<string>(DEFAULT_STORAGE);
@@ -49,7 +51,12 @@ export function CommandCenter({
   const usingLocalFolder = workspaceMode === LOCAL_FOLDER;
   const usingDefaultStorage = workspaceMode === DEFAULT_STORAGE;
   const isBusy = createExecution.isPending || stage !== null;
-  const canSubmit = task.trim().length > 0 && !isBusy && (usingLocalFolder ? workspacePath.trim().length > 0 : true);
+  const canSubmit =
+    task.trim().length > 0 &&
+    !isBusy &&
+    folder.ready &&
+    (usingLocalFolder ? workspacePath.trim().length > 0 : true);
+  const needsFolderPermission = folder.supported && (!folder.handle || !folder.granted);
 
   function addAttachments(fileList: FileList | null) {
     if (!fileList) return;
@@ -63,6 +70,19 @@ export function CommandCenter({
   async function submit() {
     if (!canSubmit) return;
     setSubmitError(null);
+
+    // Ask for the save folder BEFORE anything runs. This has to be the first
+    // await in the click/Enter handler: the browser only shows its folder
+    // picker / permission prompt while the user's gesture is still fresh.
+    if (folder.supported) {
+      const allowed = !folder.handle ? Boolean(await folder.choose()) : folder.granted || (await folder.regrant());
+      if (!allowed) {
+        setSubmitError(
+          "Choose a folder on your computer first — LocoPilot saves the finished files there so you can open them in VS Code."
+        );
+        return;
+      }
+    }
 
     try {
       let projectId: string | undefined;
@@ -197,7 +217,46 @@ export function CommandCenter({
           ))}
         </div>
 
-        <div className="mt-5 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+        <div className="mt-5 rounded-md border border-line-strong bg-black/20 px-3 py-2.5 text-sm">
+          <p className="text-xs uppercase tracking-widest2 text-ivory-faint">Save files to</p>
+          {!folder.ready ? (
+            <p className="mt-1 text-ivory-faint">Checking…</p>
+          ) : !folder.supported ? (
+            <p className="mt-1 text-ivory-dim">
+              This browser can&apos;t write to a folder on your computer. Use Chrome or Edge so LocoPilot can save the
+              finished files for you.
+            </p>
+          ) : folder.handle ? (
+            <div className="mt-1 flex flex-wrap items-center justify-between gap-2">
+              <span className="font-mono text-ivory">
+                {folder.handle.name}
+                {!folder.granted ? <span className="ml-2 text-xs text-ivory-faint">(will ask permission again)</span> : null}
+              </span>
+              <button
+                type="button"
+                disabled={isBusy}
+                onClick={() => void folder.choose()}
+                className="text-sm text-gold hover:underline disabled:opacity-40"
+              >
+                Change
+              </button>
+            </div>
+          ) : (
+            <div className="mt-1 flex flex-wrap items-center justify-between gap-2">
+              <span className="text-ivory-dim">No folder chosen — you&apos;ll be asked when you run.</span>
+              <button
+                type="button"
+                disabled={isBusy}
+                onClick={() => void folder.choose()}
+                className="text-sm text-gold hover:underline disabled:opacity-40"
+              >
+                Choose folder
+              </button>
+            </div>
+          )}
+        </div>
+
+        <div className="mt-4 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
           <div className="flex-1">
             <label htmlFor="command-workspace" className="mb-1.5 block text-xs uppercase tracking-widest2 text-ivory-faint">
               Workspace
@@ -228,7 +287,12 @@ export function CommandCenter({
             disabled={!canSubmit}
             className="flex-shrink-0 rounded-full bg-gold px-6 py-2.5 text-sm font-medium tracking-wide text-ground transition-transform duration-200 hover:scale-[1.02] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold/50 focus-visible:ring-offset-2 focus-visible:ring-offset-ground disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:scale-100"
           >
-            {stage ?? (createExecution.isPending ? "Starting LocoPilot…" : "Run LocoPilot →")}
+            {stage ??
+              (createExecution.isPending
+                ? "Starting LocoPilot…"
+                : needsFolderPermission
+                  ? "Choose folder & run →"
+                  : "Run LocoPilot →")}
           </button>
         </div>
 

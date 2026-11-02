@@ -22,6 +22,7 @@ import { PlanPanel } from "@/features/execution/PlanPanel";
 import { ReviewPanel } from "@/features/execution/ReviewPanel";
 import { DebugRetryPanel } from "@/features/execution/DebugRetryPanel";
 import { ArtifactsList } from "@/features/execution/ArtifactsList";
+import { SaveToFolderPanel } from "@/features/execution/SaveToFolderPanel";
 
 export default function ExecutionDetailPage() {
   const params = useParams<{ id: string }>();
@@ -80,6 +81,15 @@ export default function ExecutionDetailPage() {
         </div>
 
         <div className="flex flex-col gap-6 lg:col-span-2">
+          <Panel title="Save to my computer">
+            <SaveToFolderPanel
+              executionId={data.id}
+              projectId={data.project_id}
+              projectName={data.project_name}
+              finished={!active}
+            />
+          </Panel>
+
           <Panel title="Plan">
             <PlanPanel plan={data.plan} />
           </Panel>

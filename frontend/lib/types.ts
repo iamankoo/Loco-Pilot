@@ -218,3 +218,8 @@ export interface LlmHealth {
   model: string;
   detail: string | null;
 }
+
+export interface WorkspaceTreeResponse {
+  files: { name: string; path: string; is_dir: boolean; size_bytes: number | null }[];
+  truncated: boolean;
+}

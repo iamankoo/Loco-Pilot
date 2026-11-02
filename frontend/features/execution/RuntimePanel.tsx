@@ -7,6 +7,7 @@ import { ExternalLinkIcon } from "@/components/icons";
 import { cn } from "@/lib/cn";
 import { api } from "@/lib/api";
 import { useExecutionRuntime } from "@/hooks/useExecutions";
+import { useBlobUrl } from "@/hooks/useBlobUrl";
 
 const VISUAL_LABEL: Record<string, string> = {
   browser: "Verified in a real browser",
@@ -44,6 +45,10 @@ export function RuntimePanel({
   const hasRuntime = Boolean(testResults?.runtime_status);
   const live = useExecutionRuntime(executionId, hasRuntime);
   const [stopping, setStopping] = useState(false);
+  const screenshotUrl = useBlobUrl(
+    screenshotArtifact ? () => api.fetchArtifactBlob(executionId, screenshotArtifact.id) : null,
+    screenshotArtifact?.id ?? ""
+  );
 
   if (!hasRuntime) {
     return (
@@ -109,16 +114,16 @@ export function RuntimePanel({
               {testResults.console_errors.length} browser console error(s) observed.
             </p>
           ) : null}
-          {screenshotArtifact ? (
+          {screenshotArtifact && screenshotUrl ? (
             <a
-              href={api.getArtifactContentUrl(executionId, screenshotArtifact.id)}
+              href={screenshotUrl}
               target="_blank"
               rel="noreferrer"
               className="mt-1 block overflow-hidden rounded-md border border-line-strong"
             >
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
-                src={api.getArtifactContentUrl(executionId, screenshotArtifact.id)}
+                src={screenshotUrl}
                 alt="Screenshot of the running application, captured during verification"
                 className="w-full"
               />

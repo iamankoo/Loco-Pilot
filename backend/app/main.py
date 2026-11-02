@@ -5,6 +5,7 @@ Run with: uvicorn backend.app.main:app --reload
 
 from __future__ import annotations
 
+import hmac
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -35,6 +36,28 @@ def create_app() -> FastAPI:
     logger = get_logger(component="app")
 
     app = FastAPI(title="LocoPilot API", version="0.1.0", lifespan=_lifespan)
+
+    access_token = (settings.access_token or "").strip()
+
+    # Added BEFORE CORS so CORS ends up outermost: a 401 from here must
+    # still carry CORS headers, or the browser reports an opaque CORS error
+    # instead of "invalid access token".
+    if access_token:
+
+        @app.middleware("http")
+        async def require_access_token(request: Request, call_next):
+            path = request.url.path
+            protected = path.startswith("/api/") or path == "/health/llm"
+            if request.method == "OPTIONS" or not protected:
+                return await call_next(request)
+            header = request.headers.get("authorization", "")
+            supplied = header[7:].strip() if header.lower().startswith("bearer ") else ""
+            if not hmac.compare_digest(supplied.encode(), access_token.encode()):
+                return JSONResponse(
+                    status_code=401,
+                    content={"error": "unauthorized", "detail": "Missing or invalid access token."},
+                )
+            return await call_next(request)
 
     app.add_middleware(
         CORSMiddleware,

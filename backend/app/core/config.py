@@ -141,6 +141,13 @@ class Settings(BaseSettings):
     # ---- CORS ----
     cors_origins: str = "http://localhost:3000,http://localhost:5173"
 
+    # ---- Access control ----
+    # When set, every /api/* request must carry `Authorization: Bearer
+    # <access_token>`. Leave unset for local single-user development; set it
+    # on any publicly reachable deployment so strangers cannot run tasks
+    # (and spend the configured LLM key) through it.
+    access_token: str | None = None
+
     # ---- Workspace storage ----
     # Root directory for the default "LocoPilot Storage" workspace, used
     # whenever an execution is created without an explicit project or

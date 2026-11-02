@@ -1,3 +1,4 @@
+import { authHeaders, notifyUnauthorized } from "./auth";
 import type {
   ArtifactSummary,
   AgentStepSummary,
@@ -14,6 +15,7 @@ import type {
   ToolCallListResponse,
   UploadResponse,
   WorkspaceListResponse,
+  WorkspaceTreeResponse,
 } from "./types";
 
 export const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
@@ -34,9 +36,13 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const isFormData = typeof FormData !== "undefined" && init?.body instanceof FormData;
   const response = await fetch(`${API_BASE_URL}${path}`, {
     ...init,
-    headers: isFormData ? init?.headers : { "Content-Type": "application/json", ...init?.headers },
+    headers: isFormData
+      ? { ...authHeaders(), ...init?.headers }
+      : { "Content-Type": "application/json", ...authHeaders(), ...init?.headers },
     cache: "no-store",
   });
+
+  if (response.status === 401) notifyUnauthorized();
 
   if (!response.ok) {
     let detail = response.statusText;
@@ -51,6 +57,25 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
   if (response.status === 204) return undefined as T;
   return (await response.json()) as T;
+}
+
+/** Authenticated GET returning the raw bytes — used for downloads and for
+ * artifacts, where a plain <a href>/<img src> cannot carry the access-token
+ * header. */
+export async function fetchBlob(path: string): Promise<Blob> {
+  const response = await fetch(`${API_BASE_URL}${path}`, { headers: authHeaders(), cache: "no-store" });
+  if (response.status === 401) notifyUnauthorized();
+  if (!response.ok) {
+    let detail = response.statusText;
+    try {
+      const body = (await response.json()) as { detail?: string };
+      if (body?.detail) detail = body.detail;
+    } catch {
+      // not JSON
+    }
+    throw new ApiError(response.status, detail);
+  }
+  return response.blob();
 }
 
 function toQuery(params: Record<string, string | number | undefined>): string {
@@ -91,6 +116,15 @@ export const api = {
   listProjectFiles: (projectId: string, path = "") =>
     request<WorkspaceListResponse>(`/api/v1/projects/${projectId}/files${toQuery({ path })}`),
 
+  listProjectFileTree: (projectId: string) =>
+    request<WorkspaceTreeResponse>(`/api/v1/projects/${projectId}/files/tree`),
+
+  fetchProjectFile: (projectId: string, path: string) =>
+    fetchBlob(`/api/v1/projects/${projectId}/files/content${toQuery({ path })}`),
+
+  /** Cheap authenticated call used by the access gate to validate a token. */
+  checkAccess: () => request<{ api_version: string; status: string }>(`/api/v1/`),
+
   uploadProjectFiles: (projectId: string, files: File[]) => {
     const form = new FormData();
     for (const file of files) form.append("files", file);
@@ -120,8 +154,8 @@ export const api = {
   listExecutionArtifacts: (executionId: string) =>
     request<ArtifactSummary[]>(`/api/v1/executions/${executionId}/artifacts`),
 
-  getArtifactContentUrl: (executionId: string, artifactId: string) =>
-    `${API_BASE_URL}/api/v1/executions/${executionId}/artifacts/${artifactId}/content`,
+  fetchArtifactBlob: (executionId: string, artifactId: string) =>
+    fetchBlob(`/api/v1/executions/${executionId}/artifacts/${artifactId}/content`),
 
   createExecution: (payload: CreateExecutionRequest) =>
     request<ExecutionRecord>(`/api/v1/executions`, { method: "POST", body: JSON.stringify(payload) }),

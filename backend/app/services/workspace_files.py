@@ -154,3 +154,67 @@ async def save_uploaded_files(workspace_path: str | None, files: list[UploadFile
             )
         )
     return saved
+
+
+# ---- Whole-project export (used to sync results to the user's own machine) ----
+
+MAX_TREE_FILES = 2_000
+MAX_TREE_DEPTH = 12
+MAX_CONTENT_BYTES = 10_000_000
+
+
+def list_workspace_tree(workspace_path: str | None) -> tuple[list[WorkspaceEntry], bool]:
+    """Recursive, flat listing of every file under the workspace (excluded
+    and hidden directories pruned), capped at MAX_TREE_FILES. Returns
+    (files, truncated). Paths are workspace-relative, POSIX-style."""
+    workspace = _workspace_for(workspace_path)
+    files: list[WorkspaceEntry] = []
+    truncated = False
+    root_depth = len(workspace.root.parts)
+
+    for dirpath, dirnames, filenames in os.walk(workspace.root, followlinks=False):
+        dirnames[:] = sorted(
+            d for d in dirnames if d not in DEFAULT_EXCLUDED_DIRS and not d.startswith(".")
+        )
+        if len(Path(dirpath).parts) - root_depth >= MAX_TREE_DEPTH:
+            dirnames[:] = []
+        for name in sorted(filenames):
+            if name.startswith("."):
+                continue
+            absolute = Path(dirpath) / name
+            if absolute.is_symlink():
+                continue
+            if len(files) >= MAX_TREE_FILES:
+                truncated = True
+                return files, truncated
+            try:
+                size = absolute.stat().st_size
+            except OSError:
+                continue
+            files.append(
+                WorkspaceEntry(name=name, path=workspace.relative(absolute), is_dir=False, size_bytes=size)
+            )
+    return files, truncated
+
+
+def read_workspace_file(workspace_path: str | None, relative_path: str) -> Path:
+    """Resolves `relative_path` to a real, readable file inside the
+    workspace (same sandbox boundary as everything else) and returns its
+    absolute path for streaming. Rejects traversal, directories, symlinks,
+    hidden/excluded locations and oversized files."""
+    workspace = _workspace_for(workspace_path)
+    if not relative_path:
+        raise WorkspaceFileError("A file path is required.")
+    try:
+        target = workspace.resolve(relative_path)
+    except WorkspaceError as exc:
+        raise WorkspaceFileError(str(exc)) from exc
+
+    parts = Path(relative_path).parts
+    if any(p in DEFAULT_EXCLUDED_DIRS or p.startswith(".") for p in parts):
+        raise WorkspaceFileError(f"Path is not exportable: {relative_path!r}")
+    if not target.exists() or not target.is_file():
+        raise WorkspaceFileError(f"File not found: {relative_path!r}")
+    if target.stat().st_size > MAX_CONTENT_BYTES:
+        raise WorkspaceFileError(f"File too large to export: {relative_path!r}")
+    return target

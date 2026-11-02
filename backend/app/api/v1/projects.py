@@ -11,6 +11,7 @@ from __future__ import annotations
 import uuid
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -28,7 +29,13 @@ from backend.app.db.repositories.executions import (
 from backend.app.db.repositories.projects import count_projects, create_project, get_project, list_projects
 from backend.app.db.session import get_db
 from backend.app.services.execution_detail import elapsed_seconds
-from backend.app.services.workspace_files import WorkspaceFileError, list_workspace_entries, save_uploaded_files
+from backend.app.services.workspace_files import (
+    WorkspaceFileError,
+    list_workspace_entries,
+    list_workspace_tree,
+    read_workspace_file,
+    save_uploaded_files,
+)
 from backend.app.services.workspace_provisioning import provision_default_workspace
 from tools.workspace import Workspace, WorkspaceError
 
@@ -50,6 +57,11 @@ class WorkspaceEntryResponse(BaseModel):
 class WorkspaceListResponse(BaseModel):
     path: str
     entries: list[WorkspaceEntryResponse]
+
+
+class WorkspaceTreeResponse(BaseModel):
+    files: list[WorkspaceEntryResponse]
+    truncated: bool
 
 
 class UploadedFileResponse(BaseModel):
@@ -165,6 +177,39 @@ async def list_project_files_endpoint(
             for e in entries
         ],
     )
+
+
+@router.get("/{project_id}/files/tree", response_model=WorkspaceTreeResponse)
+async def project_file_tree_endpoint(project_id: uuid.UUID, db: AsyncSession = Depends(get_db)) -> WorkspaceTreeResponse:
+    """Every file in the project's workspace, flat and recursive — what the
+    browser needs to copy the finished project onto the user's own disk."""
+    project = await get_project(db, project_id)
+    if project is None:
+        raise HTTPException(404, "Project not found.")
+    try:
+        files, truncated = list_workspace_tree(project.workspace_path)
+    except WorkspaceFileError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return WorkspaceTreeResponse(
+        files=[WorkspaceEntryResponse(name=f.name, path=f.path, is_dir=False, size_bytes=f.size_bytes) for f in files],
+        truncated=truncated,
+    )
+
+
+@router.get("/{project_id}/files/content")
+async def project_file_content_endpoint(
+    project_id: uuid.UUID,
+    path: str = Query(..., description="Workspace-relative file path."),
+    db: AsyncSession = Depends(get_db),
+) -> FileResponse:
+    project = await get_project(db, project_id)
+    if project is None:
+        raise HTTPException(404, "Project not found.")
+    try:
+        target = read_workspace_file(project.workspace_path, path)
+    except WorkspaceFileError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return FileResponse(target, media_type="application/octet-stream")
 
 
 @router.post("/{project_id}/uploads", status_code=201, response_model=UploadResponse)
