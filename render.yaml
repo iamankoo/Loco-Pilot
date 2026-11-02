@@ -1,4 +1,4 @@
-# Render Blueprint for the LocoPilot backend (FastAPI + Postgres/pgvector + Redis).
+# Render Blueprint for the LocoPilot backend (FastAPI + Postgres/pgvector).
 # The frontend is deployed separately on Vercel (see docs/DEPLOYMENT.md).
 #
 # Notes
@@ -17,12 +17,6 @@ databases:
     ipAllowList: []
 
 services:
-  - type: keyvalue
-    name: locopilot-redis
-    plan: free
-    maxmemoryPolicy: allkeys-lru
-    ipAllowList: []
-
   - type: web
     name: locopilot-api
     runtime: python
@@ -56,10 +50,10 @@ services:
         fromDatabase: { name: locopilot-db, property: password }
       - key: POSTGRES_DB
         fromDatabase: { name: locopilot-db, property: database }
-      - key: REDIS_HOST
-        fromService: { type: keyvalue, name: locopilot-redis, property: host }
-      - key: REDIS_PORT
-        fromService: { type: keyvalue, name: locopilot-redis, property: port }
+      # Redis is optional (only the readiness probe used it), and a Render
+      # workspace allows just one free Key Value instance — so none is created.
+      - key: REDIS_ENABLED
+        value: "false"
       # --- LLM (secrets are entered in the Render dashboard, never committed) ---
       - key: LLM_PROVIDER
         value: nvidia

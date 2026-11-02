@@ -29,7 +29,7 @@ async def readiness() -> JSONResponse:
     redis_status = await check_redis()
 
     checks = {"database": database_status, "redis": redis_status}
-    healthy = all(check["status"] == "ok" for check in checks.values())
+    healthy = all(check["status"] in ("ok", "disabled") for check in checks.values())
 
     return JSONResponse(
         status_code=200 if healthy else 503,

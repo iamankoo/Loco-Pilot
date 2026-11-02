@@ -34,6 +34,10 @@ class Settings(BaseSettings):
     redis_port: int = 6379
     redis_db: int = 0
     redis_password: str | None = None
+    # Redis is only used for the readiness probe today (executions run
+    # in-process). Set REDIS_ENABLED=false on hosts without a Redis instance
+    # so /health/ready doesn't report a dependency the app doesn't need.
+    redis_enabled: bool = True
 
     # ---- LLM provider ----
     # nvidia (default) | gemini | qwen — provider-agnostic: swapping is a

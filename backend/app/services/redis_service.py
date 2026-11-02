@@ -25,6 +25,8 @@ def get_redis_client() -> redis.Redis:
 
 
 async def check_redis() -> dict[str, str]:
+    if not get_settings().redis_enabled:
+        return {"status": "disabled"}
     try:
         client = get_redis_client()
         pong = await client.ping()

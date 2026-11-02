@@ -1,7 +1,7 @@
 # Deploying LocoPilot
 
 - **Frontend** → Vercel, project `loco-pilot` → https://loco-pilot.vercel.app
-- **Backend** → Render, Blueprint in `render.yaml` (API + Postgres/pgvector + Redis)
+- **Backend** → Render, Blueprint in `render.yaml` (API + Postgres/pgvector; Redis is optional and disabled)
 
 ## Backend (Render)
 
