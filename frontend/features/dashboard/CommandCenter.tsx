@@ -6,9 +6,15 @@ import { useProjectsList } from "@/hooks/useProjects";
 import { useCreateExecution } from "@/hooks/useExecutionMutations";
 import { useSpeechToText } from "@/hooks/useSpeechToText";
 import { useLocalFolder } from "@/hooks/useLocalFolder";
-import { ApiError, api } from "@/lib/api";
+import { API_BASE_URL, ApiError, api } from "@/lib/api";
 import { cn } from "@/lib/cn";
 import { MicIcon, PaperclipIcon } from "@/components/icons";
+
+// "Local folder…" below means a path on the machine running the BACKEND. When
+// the backend is remote (a hosted deployment) that is meaningless to the
+// visitor — their own computer is chosen via "Save files to" instead — so the
+// option is only offered when the backend runs on this machine.
+const BACKEND_IS_LOCAL = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:|\/|$)/.test(API_BASE_URL);
 
 const DEFAULT_STORAGE = "__default_storage__";
 const LOCAL_FOLDER = "__local_folder__";
@@ -271,13 +277,15 @@ export function CommandCenter({
                 disabled={isBusy || projects.isLoading}
                 className="w-full rounded-md border border-line-strong bg-black/20 px-3 py-2.5 text-sm text-ivory focus-visible:outline-none focus-visible:border-gold/50 focus-visible:ring-2 focus-visible:ring-gold/30 disabled:opacity-60"
               >
-                <option value={DEFAULT_STORAGE}>LocoPilot Storage (default)</option>
+                <option value={DEFAULT_STORAGE}>
+                  {BACKEND_IS_LOCAL ? "LocoPilot Storage (default)" : "New project (default)"}
+                </option>
                 {projects.data?.items.map((project) => (
                   <option key={project.id} value={project.id}>
                     {project.name}
                   </option>
                 ))}
-                <option value={LOCAL_FOLDER}>Local folder…</option>
+                {BACKEND_IS_LOCAL ? <option value={LOCAL_FOLDER}>Local folder…</option> : null}
               </select>
             )}
           </div>
