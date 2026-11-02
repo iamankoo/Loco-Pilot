@@ -28,6 +28,7 @@ from backend.app.db.repositories.projects import get_project
 from backend.app.db.session import get_session_factory
 from backend.app.services.cancellation import clear_cancellation, request_cancellation
 from backend.app.services.execution_locks import get_project_execution_lock
+from backend.app.services.workspace_snapshot import restore_workspace, snapshot_workspace
 from backend.app.services.execution_workspace import (
     create_execution_workspace,
     mark_execution_workspace_status,
@@ -102,6 +103,20 @@ def _map_final_status(state: ExecutionState) -> ExecutionStatus:
     return _HONEST_STATUS_TO_DB_STATUS.get(compute_honest_status(state), ExecutionStatus.NEEDS_REVIEW)
 
 
+async def _snapshot_project_files(execution_id: uuid.UUID) -> None:
+    """Copies the project's workspace into the database, whatever the
+    execution's outcome — the files are the deliverable even when the run
+    ends in `needs_review` or an error. Never raises."""
+    try:
+        async with get_session_factory()() as db:
+            execution = await get_execution(db, execution_id)
+            project = await get_project(db, execution.project_id) if execution else None
+            if project is not None:
+                await snapshot_workspace(db, project.id, project.workspace_path)
+    except Exception:  # noqa: BLE001 - a failed backup must not mask the run's own result
+        logger.exception("workspace_snapshot_failed")
+
+
 async def run_execution(execution_id: uuid.UUID) -> None:
     """Runs one execution's full graph to completion.
 
@@ -129,6 +144,13 @@ async def run_execution(execution_id: uuid.UUID) -> None:
                     mark_completed=True,
                 )
                 return
+
+            try:
+                # A hosted server's disk can be wiped between executions —
+                # rebuild this project's workspace from the stored copy first.
+                await restore_workspace(db, project.id, project.workspace_path)
+            except Exception:  # noqa: BLE001 - restoring is best-effort
+                logger.exception("workspace_restore_failed")
 
             try:
                 workspace = Workspace.at(project.workspace_path)
@@ -230,5 +252,6 @@ async def run_execution(execution_id: uuid.UUID) -> None:
                     db, execution_id, status=status, error_message=error_message, mark_completed=True
                 )
     finally:
+        await _snapshot_project_files(execution_id)
         clear_cancellation(execution_id)
         clear_execution_context()

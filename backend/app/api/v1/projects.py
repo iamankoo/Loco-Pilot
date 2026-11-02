@@ -11,7 +11,7 @@ from __future__ import annotations
 import uuid
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -37,6 +37,7 @@ from backend.app.services.workspace_files import (
     save_uploaded_files,
 )
 from backend.app.services.workspace_provisioning import provision_default_workspace
+from backend.app.services.workspace_snapshot import list_snapshot, read_snapshot_file, workspace_exists
 from tools.workspace import Workspace, WorkspaceError
 
 router = APIRouter(prefix="/projects", tags=["projects"])
@@ -187,7 +188,12 @@ async def project_file_tree_endpoint(project_id: uuid.UUID, db: AsyncSession = D
     if project is None:
         raise HTTPException(404, "Project not found.")
     try:
-        files, truncated = list_workspace_tree(project.workspace_path)
+        if workspace_exists(project.workspace_path):
+            files, truncated = list_workspace_tree(project.workspace_path)
+        else:
+            # The server's disk was wiped (redeploy / idle spin-down): serve
+            # the copy stored in the database after the last execution.
+            files, truncated = await list_snapshot(db, project.id)
     except WorkspaceFileError as exc:
         raise HTTPException(422, str(exc)) from exc
     return WorkspaceTreeResponse(
@@ -205,6 +211,11 @@ async def project_file_content_endpoint(
     project = await get_project(db, project_id)
     if project is None:
         raise HTTPException(404, "Project not found.")
+    if not workspace_exists(project.workspace_path):
+        data = await read_snapshot_file(db, project.id, path)
+        if data is None:
+            raise HTTPException(404, f"File not found: {path!r}")
+        return Response(content=data, media_type="application/octet-stream")
     try:
         target = read_workspace_file(project.workspace_path, path)
     except WorkspaceFileError as exc:
